@@ -67,6 +67,9 @@ class Mission:
     flight_id: int | None = None
     """Unique flight ID from mission database (if available)."""
 
+    performance_model_key: str | None = None
+    """Performance model key for selecting a performance file."""
+
     @staticmethod
     def _airport_position(code: str) -> Position:
         ap = airport(code)
@@ -119,6 +122,23 @@ class Mission:
                 )
             )
         return result
+
+    @classmethod
+    def from_query_result(cls, qr: QueryResult, load_factor: float = 1.0) -> Mission:
+        """Create a `Mission` instance from a `QueryResult` instance.
+
+        This is used for generating missions from mission database queries.
+        """
+        return cls(
+            origin=qr.origin,
+            destination=qr.destination,
+            departure=qr.departure,
+            arrival=qr.arrival,
+            load_factor=load_factor,  # (real load factor not in QueryResult)
+            aircraft_type=qr.aircraft_type,
+            flight_id=qr.id,  # The schedule ID is unique across the database
+            performance_model_key=qr.performance_model_key,
+        )
 
 
 def iso_to_timestamp(s: str) -> pd.Timestamp:

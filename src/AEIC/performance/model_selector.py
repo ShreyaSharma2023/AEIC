@@ -103,18 +103,18 @@ class SimplePerformanceModelSelector:
         all that's required to satisfy the `PerformanceModelSelector`
         protocol."""
 
-        # Get aircraft type from mission.
-        ac_type = mission.aircraft_type
+        # Use performance_model_key when present, otherwise fallback to aircraft_type
+        key = mission.performance_model_key or mission.aircraft_type
 
         # Find a performance model file with that name.
-        if self._exists(ac_type):
-            return self._get(ac_type)
+        if self._exists(key):
+            return self._get(key)
 
-        # None exists, so look for synonyms of that aircraft type from the
+        # None exists, so look for synonyms of that key from the
         # configuration file.
-        if ac_type in self.synonyms:
-            return self._get(self.synonyms[ac_type])
+        if key in self.synonyms:
+            return self._get(self.synonyms[key])
 
-        # No aircraft type file exists, and no synonym exists. Use default
+        # No key file exists, and no synonym exists. Use default
         # performance model.
         return self.default_pm

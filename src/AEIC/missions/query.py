@@ -87,6 +87,55 @@ class QueryBase[T](ABC):
 class QueryResult(Mission):
     """A single flight query result."""
 
+    departure: pd.Timestamp
+    """Flight departure timestamp (UTC)."""
+
+    arrival: pd.Timestamp
+    """Flight arrival timestamp (UTC)."""
+
+    carrier: str
+    """Airline (IATA code)."""
+
+    flight_number: str
+    """Flight number."""
+
+    origin: str
+    """Origin airport (IATA code)."""
+
+    origin_country: str
+    """Origin country (ISO 3166-1 alpha-2 code)."""
+
+    destination: str
+    """Destination airport (IATA code)."""
+
+    destination_country: str
+    """Destination country (ISO 3166-1 alpha-2 code)."""
+
+    service_type: str
+    """Service type (IATA single-letter code, documented `here
+    <https://knowledge.oag.com/v1/docs/iata-service-type-codes>`__)."""
+
+    aircraft_type: str
+    """Aircraft type (ICAO code)."""
+
+    engine_type: str | None
+    """Engine type, or None if not known."""
+
+    distance: int
+    """Flight distance in kilometers."""
+
+    seat_capacity: int
+    """Seat capacity."""
+
+    id: int
+    """Unique flight instance ID."""
+
+    flight_id: int
+    """Unique flight ID."""
+
+    performance_model_key: str | None = None
+    """Performance model key for selecting a performance file."""
+
     @classmethod
     def from_row(cls, row: tuple) -> Mission:
         """Create a QueryResult from a database row."""
@@ -107,6 +156,9 @@ class QueryResult(Mission):
             flight_id=row[2],
             # Placeholder value since load factor is not included in OAG data.
             load_factor=1.0,
+            performance_model_key=row[15],
+            flight_id=row[3],
+            id=row[2],
         )
 
 
@@ -180,7 +232,7 @@ class Query(QueryBase[Mission]):
             'ao.iata_code AS origin, ao.country AS origin_country, '
             'ad.iata_code AS destination, ad.country AS destination_country, '
             'f.service_type, f.aircraft_type, f.engine_type, '
-            'f.distance, f.seat_capacity '
+            'f.distance, f.seat_capacity, s.performance_model_key '
             'FROM schedules s '
             'JOIN flights f ON f.id = s.flight_id '
             'JOIN airports ao ON f.origin = ao.id '
