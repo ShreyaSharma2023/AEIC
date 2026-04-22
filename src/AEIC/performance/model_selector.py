@@ -101,15 +101,15 @@ class SimplePerformanceModelSelector:
     def __call__(self, mission: Mission) -> BasePerformanceModel:
         """Main API for looking up a performance model for a mission."""
 
-        # 1) Prefer explicit per-row performance model key if present.
-        pm_key = getattr(mission, 'performance_model_key', None)
-        if pm_key is not None:
-            pm_key = str(pm_key).strip()
-            if pm_key:
-                if self._exists(pm_key):
-                    return self._get(pm_key)
-                if pm_key in self.synonyms:
-                    return self._get(self.synonyms[pm_key])
+        ac_type = mission.aircraft_type
+
+        if self._exists(ac_type):
+            return self._get(ac_type)
+
+        if ac_type in self.synonyms:
+            return self._get(self.synonyms[ac_type])
+
+        return self.default_pm
 
         # 2) Fall back to aircraft type.
         ac_type = mission.aircraft_type
