@@ -67,6 +67,10 @@ class Mission:
     flight_id: int | None = None
     """Unique flight ID from mission database (if available)."""
 
+    flight_level: float | None = None
+
+    performance_model_key: str | None = None
+
     @staticmethod
     def _airport_position(code: str) -> Position:
         ap = airport(code)

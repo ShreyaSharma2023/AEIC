@@ -102,23 +102,27 @@ class SimplePerformanceModelSelector:
         except FileNotFoundError:
             return None
 
-    def __call__(self, mission: Mission) -> BasePerformanceModel | None:
-        """Main API for looking up a performance model for a mission. This is
-        all that's required to satisfy the `PerformanceModelSelector`
-        protocol."""
+    def __call__(self, mission: Mission) -> BasePerformanceModel:
+        """Main API for looking up a performance model for a mission."""
 
-        # Get aircraft type from mission.
+        # 1) Prefer explicit per-row performance model key if present.
+        pm_key = getattr(mission, 'performance_model_key', None)
+        if pm_key is not None:
+            pm_key = str(pm_key).strip()
+            if pm_key:
+                if self._exists(pm_key):
+                    return self._get(pm_key)
+                if pm_key in self.synonyms:
+                    return self._get(self.synonyms[pm_key])
+
+        # 2) Fall back to aircraft type.
         ac_type = mission.aircraft_type
 
-        # Find a performance model file with that name.
         if self._exists(ac_type):
             return self._get(ac_type)
 
-        # None exists, so look for synonyms of that aircraft type from the
-        # configuration file.
         if ac_type in self.synonyms:
             return self._get(self.synonyms[ac_type])
 
-        # No aircraft type file exists, and no synonym exists. Use default
-        # performance model.
+        # 3) Default.
         return self.default_pm
