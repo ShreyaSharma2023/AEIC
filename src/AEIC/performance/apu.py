@@ -69,6 +69,11 @@ def lookup_apu(apu_name: str) -> APU | None:
 def find_apu(apu_name: str) -> APU:
     """Find APU data by name, returning "unknown" APU for unknown name."""
 
+    # Handle missing APU: use "unknown" APU with zero emissions and fuel
+    # consumption.
+    if apu_name == '':
+        return APU.unknown(apu_name)
+
     apu = lookup_apu(apu_name)
     if apu is not None:
         return apu

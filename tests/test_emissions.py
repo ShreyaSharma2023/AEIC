@@ -84,6 +84,7 @@ class DummyPerformanceModel:
 
 class DummyTrajectory:
     def __init__(self):
+        self.name = 'DUMMY'
         self.n_climb = 2
         self.n_cruise = 2
         self.n_descent = 2

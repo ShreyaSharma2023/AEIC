@@ -230,18 +230,21 @@ def sum_total_emissions(
 ) -> SpeciesValues[float]:
     """Aggregate emissions amounts across all sources. Sums pointwise
     trajectory, LTO, APU, and GSE emissions for each species."""
+
     result = SpeciesValues[float]()
-    for species in Species:
-        total = 0.0
-        if species in trajectory:
-            total += np.sum(trajectory[species])
-        if species in lto:
-            total += lto[species].sum()
-        if config.emissions.apu_enabled and species in apu:
-            total += apu[species]
-        if config.emissions.gse_enabled and species in gse:
-            total += gse[species]
-        result[species] = total
+
+    def accum(vals, f=None):
+        for species in vals:
+            val = f(vals[species]) if f is not None else vals[species]
+            if species in result:
+                result[species] += val
+            else:
+                result[species] = val
+
+    accum(trajectory, lambda arr: float(np.sum(arr)))
+    accum(lto, lambda tm_vals: float(tm_vals.sum()))
+    accum(apu)
+    accum(gse)
     return result
 
 

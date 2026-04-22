@@ -58,7 +58,9 @@ def _set_with_inline(tbl, key: str, value: Any) -> None:
         tbl[key].comment(_INLINE_COMMENTS[key])
 
 
-def _format_flight_performance(cols: list[str], data: list[list[float]]) -> str:
+def _format_flight_performance(
+    phase: str, cols: list[str], data: list[list[float]]
+) -> str:
     """Render the [flight_performance] section as a string with the
     right-aligned numeric column layout used by the sample performance
     model file."""
@@ -80,7 +82,7 @@ def _format_flight_performance(cols: list[str], data: list[list[float]]) -> str:
         data_lines.append(f'  [ {padded}],')
     data_block = 'data = [\n' + '\n'.join(data_lines) + '\n]'
 
-    return '[flight_performance]\n' + cols_block + '\n\n' + data_block + '\n'
+    return f'[{phase}_flight_performance]\n' + cols_block + '\n\n' + data_block + '\n'
 
 
 def _fix_empty_comments(text: str) -> str:
@@ -101,7 +103,9 @@ def write_legacy_performance_toml(
     apu_name: str | None,
     lto_dump: dict[str, Any],
     speeds_dump: dict[str, Any],
-    flight_performance: dict[str, Any],
+    climb_flight_performance: dict[str, Any],
+    cruise_flight_performance: dict[str, Any],
+    descent_flight_performance: dict[str, Any],
 ) -> None:
     doc = document()
     doc.add(comment('Performance model type (one of: legacy, bada, tasopt, piano).'))
@@ -174,14 +178,26 @@ def write_legacy_performance_toml(
     trailer_doc.add(nl())
     trailer = _fix_empty_comments(tomlkit.dumps(trailer_doc))
 
-    fp_section = _format_flight_performance(
-        flight_performance['cols'], flight_performance['data']
+    climb_fp_section = _format_flight_performance(
+        'climb', climb_flight_performance['cols'], climb_flight_performance['data']
+    )
+    cruise_fp_section = _format_flight_performance(
+        'cruise', cruise_flight_performance['cols'], cruise_flight_performance['data']
+    )
+    descent_fp_section = _format_flight_performance(
+        'descent',
+        descent_flight_performance['cols'],
+        descent_flight_performance['data'],
     )
 
     with open(path, 'w', encoding='utf-8') as fp:
         fp.write(body)
         fp.write(trailer)
-        fp.write(fp_section)
+        fp.write(climb_fp_section)
+        fp.write('\n')
+        fp.write(cruise_fp_section)
+        fp.write('\n')
+        fp.write(descent_fp_section)
 
 
 def lto_from_edb(engine_file, engine_uid, thrust_fractions) -> LTOPerformance:
@@ -208,19 +224,34 @@ def lto_from_toml(lto_file) -> LTOPerformance:
     return lto_input.convert()
 
 
-def build_performance_table(ptf: PTFData) -> dict[str, Any]:
+def build_performance_table(ptf: PTFData, phase: str) -> dict[str, Any]:
     cols = ['fl', 'mass', 'tas', 'rocd', 'fuel_flow']
+    include_high = True
+    if ptf.high_mass == ptf.nominal_mass:
+        include_high = False
     data = []
-    for r in ptf.climb:
-        data.append([r.fl, ptf.low_mass, r.tas, r.rocd_low, r.fuel_flow_nom])
-        data.append([r.fl, ptf.nominal_mass, r.tas, r.rocd_nom, r.fuel_flow_nom])
-        data.append([r.fl, ptf.high_mass, r.tas, r.rocd_high, r.fuel_flow_nom])
-    for r in ptf.cruise:
-        data.append([r.fl, ptf.low_mass, r.tas, 0.0, r.fuel_flow_low])
-        data.append([r.fl, ptf.nominal_mass, r.tas, 0.0, r.fuel_flow_nom])
-        data.append([r.fl, ptf.high_mass, r.tas, 0.0, r.fuel_flow_high])
-    for r in ptf.descent:
-        data.append([r.fl, ptf.nominal_mass, r.tas, r.rocd_nom, r.fuel_flow_nom])
+    match phase:
+        case 'climb':
+            for r in ptf.climb:
+                data.append([r.fl, ptf.low_mass, r.tas, r.rocd_low, r.fuel_flow_nom])
+                data.append(
+                    [r.fl, ptf.nominal_mass, r.tas, r.rocd_nom, r.fuel_flow_nom]
+                )
+                if include_high:
+                    data.append(
+                        [r.fl, ptf.high_mass, r.tas, r.rocd_high, r.fuel_flow_nom]
+                    )
+        case 'cruise':
+            for r in ptf.cruise:
+                data.append([r.fl, ptf.low_mass, r.tas, 0.0, r.fuel_flow_low])
+                data.append([r.fl, ptf.nominal_mass, r.tas, 0.0, r.fuel_flow_nom])
+                if include_high:
+                    data.append([r.fl, ptf.high_mass, r.tas, 0.0, r.fuel_flow_high])
+        case 'descent':
+            for r in ptf.descent:
+                data.append(
+                    [r.fl, ptf.nominal_mass, r.tas, r.rocd_nom, r.fuel_flow_nom]
+                )
     return dict(cols=cols, data=sorted(data, key=lambda x: (x[1], x[0], -x[3])))
 
 
@@ -291,6 +322,12 @@ def make_performance_model(ctx, output_file):
     help='Number of engines on the aircraft (1-8).',
 )
 @click.option(
+    '--maximum-payload',
+    type=int,
+    required=True,
+    help='Maximum payload in kg.',
+)
+@click.option(
     '--apu-name',
     required=False,
     help='Name of the APU used on the aircraft.',
@@ -307,6 +344,7 @@ def legacy(
     ptf_file,
     aircraft_class,
     number_of_engines,
+    maximum_payload,
     apu_name,
 ):
     Config.load()
@@ -335,12 +373,14 @@ def legacy(
         aircraft_class=aircraft_class,
         isa_offset=ptf_data.isa_offset,
         maximum_altitude_ft=ptf_data.maximum_altitude_ft,
-        maximum_payload_kg=ptf_data.maximum_payload,
+        maximum_payload_kg=maximum_payload,
         number_of_engines=number_of_engines,
         apu_name=apu_name,
         lto_dump=lto_dump,
         speeds_dump=ptf_data.speeds.model_dump(),
-        flight_performance=build_performance_table(ptf_data),
+        climb_flight_performance=build_performance_table(ptf_data, 'climb'),
+        cruise_flight_performance=build_performance_table(ptf_data, 'cruise'),
+        descent_flight_performance=build_performance_table(ptf_data, 'descent'),
     )
 
 

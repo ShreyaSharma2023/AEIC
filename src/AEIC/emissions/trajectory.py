@@ -39,6 +39,9 @@ def get_trajectory_emissions(
     Calculate emissions for each flight trajectory point.
     """
 
+    name = traj.name
+    assert isinstance(name, str)
+
     # Output emissions indices and emissions.
     indices = SpeciesValues[np.ndarray]()
     emissions = SpeciesValues[np.ndarray]()
@@ -67,6 +70,7 @@ def get_trajectory_emissions(
             pm.lto.fuel_flow,
             Tamb=atmos_state.temperature,
             Pamb=atmos_state.pressure,
+            label=name,
         )
 
     if Species.CO in config.emissions.enabled_species:
@@ -76,6 +80,7 @@ def get_trajectory_emissions(
             pm.lto.fuel_flow,
             Tamb=atmos_state.temperature,
             Pamb=atmos_state.pressure,
+            label=name,
         )
 
     if config.emissions.nvpm_enabled:
@@ -112,17 +117,25 @@ def compute_EI_NOx(
         case EINOxMethod.NONE:
             pass
         case EINOxMethod.BFFM2:
-            bffm2_result = BFFM2_EINOx(
-                sls_equiv_fuel_flow=sls_equiv_fuel_flow,
-                EI_NOx_matrix=lto.EI_NOx,
-                fuelflow_performance=lto.fuel_flow,
-                Pamb=atmos_state.pressure,
-                Tamb=atmos_state.temperature,
-            )
-            indices[Species.NOx] = bffm2_result.NOxEI
-            indices[Species.NO] = bffm2_result.NOEI
-            indices[Species.NO2] = bffm2_result.NO2EI
-            indices[Species.HONO] = bffm2_result.HONOEI
+            try:
+                bffm2_result = BFFM2_EINOx(
+                    sls_equiv_fuel_flow=sls_equiv_fuel_flow,
+                    EI_NOx_matrix=lto.EI_NOx,
+                    fuelflow_performance=lto.fuel_flow,
+                    Pamb=atmos_state.pressure,
+                    Tamb=atmos_state.temperature,
+                )
+                indices[Species.NOx] = bffm2_result.NOxEI
+                indices[Species.NO] = bffm2_result.NOEI
+                indices[Species.NO2] = bffm2_result.NO2EI
+                indices[Species.HONO] = bffm2_result.HONOEI
+            except Exception:
+                print('BBFM2 NOx calculation failed.')
+                print(f'sls_equiv_fuel_flow: {sls_equiv_fuel_flow}')
+                print(f'EI_NOx_matrix: {lto.EI_NOx}')
+                print(f'fuelflow_performance: {lto.fuel_flow}')
+                print(f'Pamb: {atmos_state.pressure}')
+                print(f'Tamb: {atmos_state.temperature}')
         case EINOxMethod.P3T3:
             print("P3T3 method not implemented yet..")
         case _:

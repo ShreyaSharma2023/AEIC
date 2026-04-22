@@ -274,8 +274,8 @@ class Builder(ABC):
 
         # Placeholder values: replaced by feasible values in first call to
         # performance model.
-        pt.true_airspeed = min(self.ac_performance.performance_table.tas)
-        pt.rate_of_climb = max(self.ac_performance.performance_table.rocd)
+        pt.true_airspeed = self.ac_performance.minimum_tas
+        pt.rate_of_climb = self.ac_performance.maximum_rocd
         pt.fuel_flow = 0.0
 
         return pt

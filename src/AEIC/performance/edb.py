@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from AEIC.config import config
@@ -35,6 +36,22 @@ class EDBEntry:
         return hash(self.engine + ':' + self.uid)
 
     def make_lto_performance(self, thrust_fractions: list[float]) -> LTOPerformance:
+        fuel_flow = self.fuel_flow
+        if any(np.isnan(self.fuel_flow.as_array())):
+            full = self.fuel_flow[ThrustMode.TAKEOFF]
+            if not np.isnan(full):
+                fixed_fuel_flow = ThrustModeValues(mutable=True)
+                fixed_fuel_flow[ThrustMode.TAKEOFF] = full
+                thrust = {m: t for m, t in zip(ThrustMode, thrust_fractions)}
+                full_thrust = thrust[ThrustMode.TAKEOFF]
+                for mode in ThrustMode:
+                    if np.isnan(self.fuel_flow[mode]):
+                        fixed_fuel_flow[mode] = full * thrust[mode] / full_thrust
+                    else:
+                        fixed_fuel_flow[mode] = self.fuel_flow[mode]
+                fixed_fuel_flow.freeze()
+                fuel_flow = fixed_fuel_flow
+
         return LTOPerformance(
             source='EDB',
             ICAO_UID=self.uid,
@@ -42,14 +59,14 @@ class EDBEntry:
             thrust_pct=ThrustModeValues(
                 {m: t * 100 for m, t in zip(ThrustMode, thrust_fractions)}
             ),
-            fuel_flow=self.fuel_flow,
+            fuel_flow=fuel_flow,
             EI_NOx=self.EI_NOx_matrix,
             EI_HC=self.HC_EI_matrix,
             EI_CO=self.CO_EI_matrix,
         )
 
     @classmethod
-    def get_engine(cls, excel_file: Path, uid: str) -> EDBEntry:
+    def get_engine(cls, excel_file: Path, uid: str, strict: bool = True) -> EDBEntry:
         """Reads the EDB Excel workbook and returns dict with EDB engine data
         for UID given, combining data from the "Gaseous Emissions and Smoke"
         and "nvPM Emissions" sheets."""
@@ -84,14 +101,15 @@ class EDBEntry:
         gaseous_uids = gaseous['UID No'].astype(str)
         nvpm_uids = nvpm['UID No'].astype(str)
 
+        # Select the first matching row in each sheet (wide-format)
         if uid_str not in set(gaseous_uids):
             raise ValueError(f"UID {uid_str} not found in sheet '{gaseous_sheet}'.")
-        if uid_str not in set(nvpm_uids):
-            raise ValueError(f"UID {uid_str} not found in sheet '{nvpm_sheet}'.")
-
-        # Select the first matching row in each sheet (wide-format)
         g = gaseous[gaseous_uids == uid_str].iloc[0]
-        n = nvpm[nvpm_uids == uid_str].iloc[0]
+        n = None
+        if uid_str in set(nvpm_uids):
+            n = nvpm[nvpm_uids == uid_str].iloc[0]
+        elif strict:
+            raise ValueError(f"UID {uid_str} not found in sheet '{nvpm_sheet}'.")
 
         # Define the four LTO modes in the desired order
         modes = [
@@ -105,13 +123,19 @@ class EDBEntry:
         def mode_dict(template: str, gaseous: bool = True) -> ThrustModeValues:
             row = g if gaseous else n
             return ThrustModeValues(
-                {mode: float(row[template.format(mode=label)]) for mode, label in modes}
+                {
+                    mode: float(row[template.format(mode=label)])
+                    if row is not None
+                    else 0.0
+                    for mode, label in modes
+                }
             )
 
         # Build a dict for this engine
         return cls(
-            engine=g['Engine Identification'],
             uid=str(uid),
+            # From gasesous sheet.
+            engine=g['Engine Identification'],
             engine_type=g['Eng Type'],
             BP_Ratio=float(g['B/P Ratio']),
             rated_thrust=float(g['Rated Thrust (kN)']),
@@ -120,11 +144,12 @@ class EDBEntry:
             HC_EI_matrix=mode_dict('HC EI {mode} (g/kg)'),
             EI_NOx_matrix=mode_dict('NOx EI {mode} (g/kg)'),
             SN_matrix=mode_dict('SN {mode}'),
+            PR=mode_dict('Pressure Ratio'),
+            # From nvPM sheet (if available).
+            EImass_max=float(n['nvPM EImass Max (mg/kg)']) if n is not None else 0.0,
+            EImass_max_thrust=-1.0,
+            EInum_max=float(n['nvPM EInum Max (#/kg)']) if n is not None else 0.0,
+            EInum_max_thrust=-1.0,
             nvPM_mass_matrix=mode_dict('nvPM EImass {mode} (mg/kg)', gaseous=False),
             nvPM_num_matrix=mode_dict('nvPM EInum {mode} (#/kg)', gaseous=False),
-            PR=mode_dict('Pressure Ratio'),
-            EImass_max=float(n['nvPM EImass Max (mg/kg)']),
-            EImass_max_thrust=-1.0,
-            EInum_max=float(n['nvPM EInum Max (#/kg)']),
-            EInum_max_thrust=-1.0,
         )

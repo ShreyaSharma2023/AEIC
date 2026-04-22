@@ -1,6 +1,10 @@
+import logging
+
 import numpy as np
 
 from AEIC.performance.types import ThrustMode, ThrustModeValues
+
+logger = logging.getLogger(__name__)
 
 
 def EI_HCCO(
@@ -9,6 +13,7 @@ def EI_HCCO(
     ff_cal: ThrustModeValues,
     Tamb: float | np.ndarray,
     Pamb: float | np.ndarray,
+    label: str = '',
 ) -> np.ndarray:
     """
     BFFM2 bilinear HC/CO fit to SLS data
@@ -31,6 +36,10 @@ def EI_HCCO(
     xEI : ndarray, shape (n_points,)
         The HC+CO emission index [g x / kg fuel] at each ff_eval.
     """
+
+    if any(x_EI.as_array() == 0.0) or any(ff_cal.as_array() == 0.0):
+        logger.warning(f'Calibration xEI and fuel flows must be positive. ({label})')
+        return np.zeros(len(ff_eval), dtype=float)
 
     # ----------------------------------------------------------------------------
     # 1. Compute slanted‐line parameters in log10 space

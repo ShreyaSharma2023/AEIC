@@ -13,7 +13,7 @@ interpolation to work correctly."""
 # TODO: Remove this when we migrate to Python 3.14+.
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import ClassVar, Literal, Self
 
@@ -182,76 +182,86 @@ class PerformanceTable:
     mass: list[float]
     """Sorted list of unique mass values in the table."""
 
-    _interpolators: dict[ROCDFilter, Interpolator] = field(default_factory=dict)
-    """Interpolators for each flight phase table segment."""
+    rocd_filter: ROCDFilter
+    """ROCD filter for this performance table segment."""
+
+    _interpolator: Interpolator | None = None
+    """Interpolator for single flight phase table segment."""
 
     ZERO_ROCD_TOL: ClassVar[float] = 1.0e-6
     """Tolerance for zero rate of climb/descent comparisons."""
 
     def __post_init__(self):
-        # Check that we have the right number of mass values: three for the
-        # whole table and the same for the climb and cruise sub-tables, but one
-        # for the descent sub-table.
-        sub_table = None
-        n_mass_values = 3
-        if all(v > self.ZERO_ROCD_TOL for v in self.rocd):
-            sub_table = 'positive'
-        elif all(abs(v) <= self.ZERO_ROCD_TOL for v in self.rocd):
-            sub_table = 'zero'
-        elif all(v < -self.ZERO_ROCD_TOL for v in self.rocd):
-            sub_table = 'negative'
-            n_mass_values = 1
-        if len(self.mass) != n_mass_values:
-            sub_table_str = '(' + sub_table + ') ' if sub_table is not None else ''
+        # Check the sign of the ROCD values in the table matches the ROCD
+        # filter for this table segment.
+        match self.rocd_filter:
+            case ROCDFilter.NEGATIVE:
+                phase = 'descent'
+                if not all(v < -self.ZERO_ROCD_TOL for v in self.rocd):
+                    raise ValueError(
+                        'ROCD values in descent performance table are not all negative'
+                    )
+            case ROCDFilter.ZERO:
+                phase = 'cruise'
+                if not all(abs(v) <= self.ZERO_ROCD_TOL for v in self.rocd):
+                    raise ValueError(
+                        'ROCD values in cruise performance table are not all zero'
+                    )
+            case ROCDFilter.POSITIVE:
+                phase = 'climb'
+                # Condition is different here because climb ROCD values can be
+                # zero near the operating ceiling of an aircraft.
+                if not all(v >= 0.0 for v in self.rocd):
+                    raise ValueError(
+                        'some ROCD values in climb performance table are negative'
+                    )
+
+        # Check that we have the right number of mass values: two or three for
+        # the climb and cruise phases, but one for the descent sub-table.
+        mass_ok = True
+        if self.rocd_filter == ROCDFilter.NEGATIVE:
+            mass_ok = len(self.mass) == 1
+        else:
+            mass_ok = len(self.mass) in (2, 3)
+        if not mass_ok:
             raise ValueError(
-                f'Legacy performance table {sub_table_str}'
-                f'has wrong number of mass values (should be {n_mass_values})'
+                f'Legacy performance table ({phase}) has wrong number of mass values'
             )
-
-        # Split into sub-tables for checking. (The asserts are to help type
-        # checkers.)
-        check_zero = self.df[
-            (self.df.rocd >= -self.ZERO_ROCD_TOL) & (self.df.rocd <= self.ZERO_ROCD_TOL)
-        ]
-        assert isinstance(check_zero, pd.DataFrame)
-        check_pos = self.df[self.df.rocd > self.ZERO_ROCD_TOL]
-        assert isinstance(check_pos, pd.DataFrame)
-        check_neg = self.df[self.df.rocd < -self.ZERO_ROCD_TOL]
-        assert isinstance(check_neg, pd.DataFrame)
-
-        def check_coverage(df, label):
-            if len(df.fl.unique()) * len(df.mass.unique()) != len(df):
-                raise ValueError(
-                    f'Performance data at {label} ROC does not have full coverage'
-                )
 
         # For each of positive, zero, and negative ROCD, it should be the case
         # that the input data is dense in (FL, mass) values, in the sense that
         # #rows = #FL × #mass.
-        check_coverage(check_zero, 'zero')
-        check_coverage(check_pos, 'positive')
-        check_coverage(check_neg, 'negative')
+        if len(self.df.fl.unique()) * len(self.df.mass.unique()) != len(self.df):
+            raise ValueError(
+                f'Performance data for {phase} does not have full coverage'
+            )
 
-        def check_fl_only(df: pd.DataFrame, var: str, label: str):
-            if len(df.drop_duplicates(subset=['fl', var])) != len(df.fl.unique()):
+        def check_fl_only(var: str):
+            if len(self.df.drop_duplicates(subset=['fl', var])) != len(
+                self.df.fl.unique()
+            ):
                 raise ValueError(
-                    f'{var} at {label} ROC depends on variables other than FL'
+                    f'{var} for {phase} phase depends on variables other than FL'
                 )
 
-        # Zero ROC: TAS should depend only on FL.
-        check_fl_only(check_zero, 'tas', 'zero')
+        match self.rocd_filter:
+            case ROCDFilter.ZERO:
+                # Zero ROC: TAS should depend only on FL.
+                check_fl_only('tas')
 
-        # Positive ROC: TAS and fuel flow should depend only on FL.
-        check_fl_only(check_pos, 'tas', 'positive')
-        check_fl_only(check_pos, 'fuel_flow', 'positive')
+            case ROCDFilter.POSITIVE:
+                # Positive ROC: TAS and fuel flow should depend only on FL.
+                check_fl_only('tas')
+                check_fl_only('fuel_flow')
 
-        # Negative ROC: TAS, fuel flow and ROCD should depend only on FL.
-        check_fl_only(check_neg, 'tas', 'negative')
-        check_fl_only(check_neg, 'fuel_flow', 'negative')
-        check_fl_only(check_neg, 'rocd', 'negative')
+            case ROCDFilter.NEGATIVE:
+                # Negative ROC: TAS, fuel flow and ROCD should depend only on FL.
+                check_fl_only('tas')
+                check_fl_only('fuel_flow')
+                check_fl_only('rocd')
 
     @classmethod
-    def from_input(cls, ptin: PerformanceTableInput) -> Self:
+    def from_input(cls, ptin: PerformanceTableInput, rocd_type: ROCDFilter) -> Self:
         """Convert performance table data from input format.
 
         This class holds performance table data in the form needed for
@@ -269,12 +279,12 @@ class PerformanceTable:
         rocd = sorted(df.rocd.unique().tolist())
         mass = sorted(df.mass.unique().tolist())
 
-        return cls(df=df, fl=fl, tas=tas, rocd=rocd, mass=mass)
+        return cls(df=df, fl=fl, tas=tas, rocd=rocd, mass=mass, rocd_filter=rocd_type)
 
     def __len__(self) -> int:
         return len(self.df)
 
-    def interpolate(self, state: AircraftState, rocd: ROCDFilter) -> Performance:
+    def interpolate(self, state: AircraftState) -> Performance:
         """Perform bilinear interpolation in flight level and aircraft mass.
 
         The interpolation is done in the subset of the performance table
@@ -288,37 +298,10 @@ class PerformanceTable:
             mass = max(self.mass)
 
         # Lazily create interpolator for flight phase segment.
-        if rocd not in self._interpolators:
-            self._interpolators[rocd] = Interpolator(self.subset(rocd).df)
+        if self._interpolator is None:
+            self._interpolator = Interpolator(self.df)
 
-        return self._interpolators[rocd](fl, mass)
-
-    def subset(self, rocd: ROCDFilter) -> PerformanceTable:
-        """Extract subset of performance table for given rate of climb/descent
-        filter."""
-
-        df_new = self.df
-
-        match rocd:
-            case ROCDFilter.NEGATIVE:
-                df_new = df_new[df_new.rocd < -self.ZERO_ROCD_TOL]
-            case ROCDFilter.ZERO:
-                df_new = df_new[
-                    (df_new.rocd >= -self.ZERO_ROCD_TOL)
-                    & (df_new.rocd <= self.ZERO_ROCD_TOL)
-                ]
-            case ROCDFilter.POSITIVE:
-                df_new = df_new[df_new.rocd > self.ZERO_ROCD_TOL]
-        assert isinstance(df_new, pd.DataFrame)
-
-        fl_new = sorted(df_new.fl.unique().tolist())
-        tas_new = sorted(df_new.tas.unique().tolist())
-        rocd_new = sorted(df_new.rocd.unique().tolist())
-        mass_new = sorted(df_new.mass.unique().tolist())
-
-        return PerformanceTable(
-            df=df_new, fl=fl_new, tas=tas_new, rocd=rocd_new, mass=mass_new
-        )
+        return self._interpolator(fl, mass)
 
 
 class LegacyPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
@@ -327,17 +310,33 @@ class LegacyPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
     model_type: Literal['legacy']
     """Model type identifier for TOML input files."""
 
-    flight_performance: PerformanceTableInput
-    """Input data for flight performance table."""
+    climb_flight_performance: PerformanceTableInput
+    """Input data for flight performance table in climb phase."""
 
-    _performance_table: PerformanceTable = PrivateAttr()
+    cruise_flight_performance: PerformanceTableInput
+    """Input data for flight performance table in cruise phase."""
+
+    descent_flight_performance: PerformanceTableInput
+    """Input data for flight performance table in descent phase."""
+
+    _climb_performance_table: PerformanceTable = PrivateAttr()
+    _cruise_performance_table: PerformanceTable = PrivateAttr()
+    _descent_performance_table: PerformanceTable = PrivateAttr()
 
     @model_validator(mode='after')
     def validate_pm(self, info):
         """Validate performance model after creation."""
 
-        # Create performance table from "flight_performance" section.
-        self._performance_table = PerformanceTable.from_input(self.flight_performance)
+        # Create performance tables from "flight_performance" sections.
+        self._climb_performance_table = PerformanceTable.from_input(
+            self.climb_flight_performance, ROCDFilter.POSITIVE
+        )
+        self._cruise_performance_table = PerformanceTable.from_input(
+            self.cruise_flight_performance, ROCDFilter.ZERO
+        )
+        self._descent_performance_table = PerformanceTable.from_input(
+            self.descent_flight_performance, ROCDFilter.NEGATIVE
+        )
 
         return self
 
@@ -346,17 +345,49 @@ class LegacyPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
         """Empty aircraft mass.
 
         Empty mass per BADA-3 is lowest mass in performance table / 1.2."""
-        return min(self.performance_table.mass) / 1.2
+        return (
+            min(
+                min(self._climb_performance_table.mass),
+                min(self._cruise_performance_table.mass),
+                min(self._descent_performance_table.mass),
+            )
+            / 1.2
+        )
 
     @property
     def maximum_mass(self) -> float:
         """Maximum aircraft mass from performance table."""
-        return max(self.performance_table.mass)
+        return max(
+            max(self._climb_performance_table.mass),
+            max(self._cruise_performance_table.mass),
+            max(self._descent_performance_table.mass),
+        )
 
     @property
-    def performance_table(self) -> PerformanceTable:
+    def maximum_rocd(self) -> float:
+        return max(
+            max(self._climb_performance_table.rocd),
+            max(self._cruise_performance_table.rocd),
+            max(self._descent_performance_table.rocd),
+        )
+
+    @property
+    def minimum_tas(self) -> float:
+        return min(
+            min(self._climb_performance_table.tas),
+            min(self._cruise_performance_table.tas),
+            min(self._descent_performance_table.tas),
+        )
+
+    def performance_table(self, rocd_filter: ROCDFilter) -> PerformanceTable:
         """Performance table accessor."""
-        return self._performance_table
+        match rocd_filter:
+            case ROCDFilter.POSITIVE:
+                return self._climb_performance_table
+            case ROCDFilter.ZERO:
+                return self._cruise_performance_table
+            case ROCDFilter.NEGATIVE:
+                return self._descent_performance_table
 
     def evaluate_impl(
         self, state: AircraftState, rules: SimpleFlightRules
@@ -372,8 +403,8 @@ class LegacyPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
 
         match rules:
             case SimpleFlightRules.CLIMB:
-                return self._performance_table.interpolate(state, ROCDFilter.POSITIVE)
+                return self._climb_performance_table.interpolate(state)
             case SimpleFlightRules.CRUISE:
-                return self._performance_table.interpolate(state, ROCDFilter.ZERO)
+                return self._cruise_performance_table.interpolate(state)
             case SimpleFlightRules.DESCEND:
-                return self._performance_table.interpolate(state, ROCDFilter.NEGATIVE)
+                return self._descent_performance_table.interpolate(state)
