@@ -89,8 +89,6 @@ class QueryResult(Mission):
 
     @classmethod
     def from_row(cls, row: tuple) -> Mission:
-        """Create a QueryResult from a database row."""
-
         return Mission(
             departure=pd.Timestamp.fromtimestamp(row[0], 'UTC'),
             arrival=pd.Timestamp.fromtimestamp(row[1], 'UTC'),
@@ -105,8 +103,9 @@ class QueryResult(Mission):
             engine_type=row[12],
             seat_capacity=row[14],
             flight_id=row[2],
-            # Placeholder value since load factor is not included in OAG data.
             load_factor=1.0,
+            flight_level=row[15],
+            performance_model_key=row[16],
         )
 
 
@@ -175,13 +174,15 @@ class Query(QueryBase[Mission]):
                 ]
 
         sql = (
-            'SELECT s.departure_timestamp, s.arrival_timestamp, '
+            'SELECT '
+            's.departure_timestamp, s.arrival_timestamp, '
             's.id as id, f.id as flight_id, f.carrier, f.flight_number, '
             'ao.iata_code AS origin, ao.country AS origin_country, '
             'ad.iata_code AS destination, ad.country AS destination_country, '
             'f.service_type, f.aircraft_type, f.engine_type, '
-            'f.distance, f.seat_capacity '
-            'FROM schedules s '
+            'f.distance, f.seat_capacity, '
+            's.flight_level, f.performance_model_key '
+            'FROM schedules_with_flight_level s '
             'JOIN flights f ON f.id = s.flight_id '
             'JOIN airports ao ON f.origin = ao.id '
             'JOIN airports ad ON f.destination = ad.id'
@@ -261,19 +262,13 @@ class CountQuery(QueryBase[int]):
     """Count scheduled flights."""
 
     RESULT_TYPE = int
-    """Result type returned by this query class."""
-
     PROCESS_RESULT = lambda _, gen: next(gen)[0]  # noqa
 
     def to_sql(self) -> tuple[str, list]:
         """Generate the SQL query string and parameters."""
-
-        # Handle filter and date conditions.
         self._common_conditions()
 
-        # Build the SQL query, shortcutting the common case of no conditions to
-        # count all flight instances.
-        sql = 'SELECT COUNT(s.id) FROM schedules s'
+        sql = 'SELECT COUNT(s.id) FROM schedules_with_flight_level s'
         if len(self._conditions) > 0:
             sql += (
                 ' JOIN flights f ON f.id = s.flight_id '
@@ -281,7 +276,6 @@ class CountQuery(QueryBase[int]):
                 'JOIN airports ad ON f.destination = ad.id'
                 f'{self._where_clause()}'
             )
-
         return sql, self._params
 
 
