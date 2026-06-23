@@ -1,3 +1,4 @@
+import csv
 import logging
 import math
 import re
@@ -34,6 +35,7 @@ def map_phase(
     grid: Grid,
     map_output: str,
     filter_expr: Filter | None = None,
+    flight_id_output: Path | None = None,
 ):
     # Build output array. This assumes that all trajectories have the same set
     # of species, which should be the case if they are all processed with the
@@ -62,7 +64,13 @@ def map_phase(
     p = Progress(total=ntrajs, desc='Trajectory')
     lat_min = min(grid.latitude.range)
     lon_min = min(grid.longitude.range)
+    flight_id_records = []
     for traj in traj_iter:
+        flight_id = getattr(traj, 'flight_id', None)
+        accepted_segments = 0
+        skipped_subtrajectories = 0
+        skip_reasons = []
+
         # Split trajectories across the date line and process each
         # sub-trajectory separately.
         for sub_traj in traj.dateline_split():
@@ -101,11 +109,74 @@ def map_phase(
             else:
                 z0[start:end] = sub_traj.altitude[:-1]
                 z1[start:end] = sub_traj.altitude[1:]
+
+            bad = False
+
             for i, sp in enumerate(species):
-                emissions[start:end, i] = sub_traj.trajectory_emissions[sp][:-1]
-            nsegs += len(sub_traj) - 1
+                vals = np.asarray(sub_traj.trajectory_emissions[sp])
+
+                expected = end - start
+
+                # Common case: emissions are point-length, so drop last point.
+                if len(vals) == expected + 1:
+                    vals = vals[:-1]
+
+                # Segment-length case.
+                elif len(vals) == expected:
+                    pass
+
+                # Empty emissions: treat as zero for this species.
+                elif len(vals) == 0:
+                    logger.warning(
+                        "Zero-filling empty emissions for species=%s, expected=%s",
+                        sp,
+                        expected,
+                    )
+                    vals = np.zeros(expected)
+
+                # Anything else is genuinely inconsistent.
+                else:
+                    reason = (
+                        f'inconsistent_emissions_length:{sp}:'
+                        f'expected={expected}:got={len(vals)}'
+                    )
+                    logger.warning(
+                        "Skipping trajectory due to inconsistent emissions length: "
+                        "species=%s expected=%s got=%s",
+                        sp,
+                        expected,
+                        len(vals),
+                    )
+                    bad = True
+                    skip_reasons.append(reason)
+                    break
+
+                emissions[start:end, i] = vals
+
+            if bad:
+                skipped_subtrajectories += 1
+                continue
+
+            accepted = len(sub_traj) - 1
+            nsegs += accepted
+            accepted_segments += accepted
 
         p.update()
+        if accepted_segments > 0:
+            status = 'partial' if skipped_subtrajectories else 'gridded'
+        else:
+            status = 'skipped'
+            if not skip_reasons:
+                skip_reasons.append('no_valid_segments')
+        flight_id_records.append(
+            {
+                'flight_id': '' if flight_id is None else int(flight_id),
+                'status': status,
+                'accepted_segments': accepted_segments,
+                'skipped_subtrajectories': skipped_subtrajectories,
+                'reason': ';'.join(skip_reasons),
+            }
+        )
     p.close()
 
     # Process any left-over segments in the batch arrays.
@@ -137,6 +208,22 @@ def map_phase(
     save.attrs['filter_json'] = (
         filter_expr.model_dump_json() if filter_expr is not None else None
     )
+
+    if flight_id_output is not None:
+        flight_id_output.parent.mkdir(parents=True, exist_ok=True)
+        with open(flight_id_output, 'w', newline='') as fp:
+            writer = csv.DictWriter(
+                fp,
+                fieldnames=[
+                    'flight_id',
+                    'status',
+                    'accepted_segments',
+                    'skipped_subtrajectories',
+                    'reason',
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(flight_id_records)
 
 
 def _discover_slice_files(map_prefix: str) -> tuple[dict[int, Path], list[int]]:
@@ -396,6 +483,11 @@ final output NetCDF file."""
     default=0,
     help='Index of the slice to process (0-based, map phase only).',
 )
+@click.option(
+    '--flight-id-output',
+    type=click.Path(path_type=Path),
+    help='Optional CSV file for map-phase gridded/skipped flight IDs.',
+)
 def trajectories_to_grid(
     input_store: Path,
     mission_db_file: Path | None,
@@ -407,6 +499,7 @@ def trajectories_to_grid(
     map_prefix: str,
     slice_count: int,
     slice_index: int,
+    flight_id_output: Path | None,
 ):
     logging.basicConfig(
         level=logging.INFO,
@@ -451,7 +544,15 @@ def trajectories_to_grid(
                 logger.info('Flights to process in slice: %s', limit)
                 map_output = f'{map_prefix}-{slice_index:05d}.zarr'
                 t0 = time.perf_counter()
-                map_phase(limit, species, traj_iter, grid, map_output, filter_expr)
+                map_phase(
+                    limit,
+                    species,
+                    traj_iter,
+                    grid,
+                    map_output,
+                    filter_expr,
+                    flight_id_output,
+                )
                 logger.info('map_phase elapsed: %.3f s', time.perf_counter() - t0)
 
             case 'reduce':
