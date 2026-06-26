@@ -83,6 +83,26 @@ def test_airport_handling(tmp_path):
         assert cur.fetchone() is None
 
 
+def test_schema_has_enrichment_columns(tmp_path):
+    """Verify that the DB schema includes the new enrichment columns."""
+    with WritableDatabase(tmp_path / 'test_schema.sqlite') as db:
+        cur = db._conn.cursor()
+
+        # Check flights table has performance_model_key column.
+        cur.execute('PRAGMA table_info(flights)')
+        flights_columns = {row[1] for row in cur.fetchall()}
+        assert 'performance_model_key' in flights_columns, (
+            'flights table is missing performance_model_key column'
+        )
+
+        # Check schedules table has flight_level column.
+        cur.execute('PRAGMA table_info(schedules)')
+        schedules_columns = {row[1] for row in cur.fetchall()}
+        assert 'flight_level' in schedules_columns, (
+            'schedules table is missing flight_level column'
+        )
+
+
 def test_oag_conversion(tmp_path, test_data_dir):
     # This extract of the 2019 OAG data contains 8 valid flights (see
     # tests/data/oag/README.md for provenance and expected filtering).

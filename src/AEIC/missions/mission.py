@@ -67,6 +67,14 @@ class Mission:
     flight_id: int | None = None
     """Unique flight ID from mission database (if available)."""
 
+    flight_level: float | None = None
+    """Cruise flight level from ADS-B data (FL units), or None if not available."""
+
+    performance_model_key: str | None = None
+    """Key identifying the specific performance model TOML file to use for this flight.
+    Set during preprocessing from (aircraft_type, engine_type, seat_capacity) lookup.
+    Falls back to aircraft_type in the model selector when None."""
+
     @staticmethod
     def _airport_position(code: str) -> Position:
         ap = airport(code)

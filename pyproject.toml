@@ -119,3 +119,4 @@ testpaths = ["tests"]
 # Numpy claims these warnings are harmless, so filter them out:
 # https://github.com/numpy/numpy/blob/46268caa719db95ab2198bcd619f0e3120d7c52e/numpy/__init__.py#L704-L707
 filterwarnings = ["ignore:numpy.ndarray size changed:RuntimeWarning"]
+pythonpath = ["src"]
