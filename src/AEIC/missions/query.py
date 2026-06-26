@@ -107,6 +107,8 @@ class QueryResult(Mission):
             flight_id=row[2],
             # Placeholder value since load factor is not included in OAG data.
             load_factor=1.0,
+            flight_level=row[15],
+            performance_model_key=row[16],
         )
 
 
@@ -180,7 +182,8 @@ class Query(QueryBase[Mission]):
             'ao.iata_code AS origin, ao.country AS origin_country, '
             'ad.iata_code AS destination, ad.country AS destination_country, '
             'f.service_type, f.aircraft_type, f.engine_type, '
-            'f.distance, f.seat_capacity '
+            'f.distance, f.seat_capacity, '
+            's.flight_level, f.performance_model_key '
             'FROM schedules s '
             'JOIN flights f ON f.id = s.flight_id '
             'JOIN airports ao ON f.origin = ao.id '

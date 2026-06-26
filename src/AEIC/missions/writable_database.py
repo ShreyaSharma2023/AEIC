@@ -166,6 +166,7 @@ class WritableDatabase(Database):
             ('flights', 'distance', False),
             ('flights', 'seat_capacity', False),
             ('flights', 'od_pair', False),
+            ('flights', 'performance_model_key', False),
             ('schedules', 'departure_timestamp', False),
             ('schedules', 'flight_id', False),
             ('airports', 'iata_code', True),
@@ -541,7 +542,8 @@ class WritableDatabase(Database):
             effective_from TEXT NOT NULL,
             effective_to TEXT NOT NULL,
             number_of_flights INTEGER NOT NULL,
-            od_pair TEXT NOT NULL
+            od_pair TEXT NOT NULL,
+            performance_model_key TEXT
           )""")
 
         cur.execute("""
@@ -550,7 +552,8 @@ class WritableDatabase(Database):
             departure_timestamp INTEGER NOT NULL,
             arrival_timestamp INTEGER NOT NULL,
             day INTEGER NOT NULL,
-            flight_id INTEGER NOT NULL REFERENCES flights(id)
+            flight_id INTEGER NOT NULL REFERENCES flights(id),
+            flight_level REAL
           )""")
 
         cur.execute("""
