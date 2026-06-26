@@ -103,6 +103,18 @@ class SimplePerformanceModelSelector:
         all that's required to satisfy the `PerformanceModelSelector`
         protocol."""
 
+        # If a per-flight performance model key is set, try it first.
+        pm_key = mission.performance_model_key
+        if pm_key is not None:
+            # Check for a direct TOML file matching the key.
+            if self._exists(pm_key):
+                return self._get(pm_key)
+            # Check for a synonym mapping for the key.
+            if pm_key in self.synonyms:
+                return self._get(self.synonyms[pm_key])
+
+        # Fall through to aircraft_type-based lookup.
+
         # Get aircraft type from mission.
         ac_type = mission.aircraft_type
 

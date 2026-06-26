@@ -77,10 +77,14 @@ class LegacyContext(Context):
         if self.clm_start_altitude >= ac_performance.maximum_altitude:
             self.clm_start_altitude = mission.origin_position.altitude
 
-        # Cruise altitude is the operating ceiling - 7000 feet.
-        self.crz_start_altitude = (
-            ac_performance.maximum_altitude - 7000.0 * FEET_TO_METERS
-        )
+        # Use observed cruise FL when available; fall back to rule-based estimate.
+        if mission.flight_level is not None:
+            self.crz_start_altitude = mission.flight_level * 100.0 * FEET_TO_METERS
+        else:
+            # Cruise altitude is the operating ceiling - 7000 feet.
+            self.crz_start_altitude = (
+                ac_performance.maximum_altitude - 7000.0 * FEET_TO_METERS
+            )
 
         # Ensure cruise altitude is above the starting altitude.
         if self.crz_start_altitude < self.clm_start_altitude:
