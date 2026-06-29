@@ -89,7 +89,11 @@ def get_trajectory_emissions(
         )
 
     for species in indices.keys():
-        emissions[species] = indices[species] * fuel_burn_per_segment
+        # Use the EI at waypoint i-1 (start of each segment) multiplied by
+        # the fuel burned in that segment to reach waypoint i.  Element [0]
+        # stays zero — there is no incoming segment at departure.
+        emissions[species] = np.zeros_like(fuel_burn_per_segment)
+        emissions[species][1:] = indices[species][:-1] * fuel_burn_per_segment[1:]
 
     idx_slice = _trajectory_slice(traj)
     for species in indices.keys():
