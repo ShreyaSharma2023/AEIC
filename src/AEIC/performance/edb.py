@@ -11,6 +11,10 @@ from AEIC.config import config
 
 from .types import LTOPerformance, ThrustMode, ThrustModeValues
 
+# Global cache: avoids re-reading the Excel EDB file on every LRU eviction.
+# Key = str(excel_file path), value = (gaseous_df, nvpm_df).
+_EDB_SHEET_CACHE: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
+
 
 @dataclass
 class EDBEntry:
@@ -70,29 +74,33 @@ class EDBEntry:
         """Reads the EDB Excel workbook and returns dict with EDB engine data
         for UID given, combining data from the "Gaseous Emissions and Smoke"
         and "nvPM Emissions" sheets."""
-        try:
-            xls = pd.ExcelFile(excel_file)
-        except Exception as exc:
-            raise ValueError(
-                f"Unable to open EDB workbook at {config.edb_input_file}: {exc}"
-            ) from exc
-
+        cache_key = str(excel_file)
         gaseous_sheet = 'Gaseous Emissions and Smoke'
         nvpm_sheet = 'nvPM Emissions'
+        if cache_key not in _EDB_SHEET_CACHE:
+            try:
+                xls = pd.ExcelFile(excel_file)
+            except Exception as exc:
+                raise ValueError(
+                    f"Unable to open EDB workbook at {config.edb_input_file}: {exc}"
+                ) from exc
 
-        missing_sheets = [
-            sheet
-            for sheet in (gaseous_sheet, nvpm_sheet)
-            if sheet not in xls.sheet_names
-        ]
-        if missing_sheets:
-            missing = ', '.join(missing_sheets)
-            raise ValueError(f"EDB workbook is missing required sheets: {missing}")
+            missing_sheets = [
+                sheet
+                for sheet in (gaseous_sheet, nvpm_sheet)
+                if sheet not in xls.sheet_names
+            ]
+            if missing_sheets:
+                missing = ', '.join(missing_sheets)
+                raise ValueError(f"EDB workbook is missing required sheets: {missing}")
 
-        gaseous = xls.parse(gaseous_sheet)
-        assert isinstance(gaseous, pd.DataFrame)
-        nvpm = xls.parse(nvpm_sheet)
-        assert isinstance(nvpm, pd.DataFrame)
+            gaseous = xls.parse(gaseous_sheet)
+            assert isinstance(gaseous, pd.DataFrame)
+            nvpm = xls.parse(nvpm_sheet)
+            assert isinstance(nvpm, pd.DataFrame)
+            _EDB_SHEET_CACHE[cache_key] = (gaseous, nvpm)
+
+        gaseous, nvpm = _EDB_SHEET_CACHE[cache_key]
 
         if 'UID No' not in gaseous.columns or 'UID No' not in nvpm.columns:
             raise ValueError("UID No column is missing from one or both sheets.")
