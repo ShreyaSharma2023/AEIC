@@ -175,9 +175,17 @@ class LegacyContext(Context):
                 ceiling_fl=ac_performance.maximum_altitude * METERS_TO_FL,
             )
 
-        # In legacy trajectory, descent start altitude is equal to cruise
-        # altitude.
-        self.des_start_altitude = self.crz_start_altitude
+        # Descent starts wherever cruise actually leaves off. With a step-
+        # climb profile that is the last (highest) breakpoint, not the
+        # initial cruise altitude (crz_start_altitude) -- using the latter
+        # understates the real altitude drop, and thus descent_dist_approx
+        # below, for any mission that climbs during cruise.
+        if self.cruise_profile is not None:
+            self.des_start_altitude = (
+                max(fl for _, fl in self.cruise_profile) * 100.0 * FEET_TO_METERS
+            )
+        else:
+            self.des_start_altitude = self.crz_start_altitude
 
         # Set descent altitude based on 3000' above arrival airport altitude;
         # clamp to aircraft operating ceiling if needed.
