@@ -296,3 +296,20 @@ def test_adjustable_legacy_step_climb_matches_legacy(
     assert adjustable_traj.n_climb == legacy_traj.n_climb
     assert adjustable_traj.n_cruise == legacy_traj.n_cruise
     assert adjustable_traj.n_descent == legacy_traj.n_descent
+
+
+def test_adjustable_legacy_ground_distance_iter(sample_missions, performance_model):
+    """Ground-distance iteration (implemented generically in `base.Builder`
+    against `descent_dist_approx`) must also converge for the adjustable
+    builder, since its Context defines that attribute too."""
+    mission = sample_missions[0]
+    ground_track = _ground_track(mission)
+
+    builder = tb.AdjustableLegacyBuilder(
+        options=tb.Options(iterate_mass=False, iterate_ground_distance=True)
+    )
+    traj = builder.fly(performance_model, mission)
+
+    assert float(traj.ground_distance[-1]) == pytest.approx(
+        ground_track.total_distance, abs=1.0
+    )

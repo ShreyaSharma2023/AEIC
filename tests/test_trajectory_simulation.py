@@ -5,7 +5,8 @@ import AEIC.trajectories.builders as tb
 from AEIC.missions import Mission
 from AEIC.missions.mission import iso_to_timestamp
 from AEIC.storage import FieldMetadata, FieldSet
-from AEIC.trajectories import TrajectoryStore
+from AEIC.trajectories import GroundTrack, TrajectoryStore
+from AEIC.trajectories.builders.base import Context
 from AEIC.trajectories.builders.legacy import LegacyContext
 from AEIC.units import FEET_TO_METERS
 
@@ -239,6 +240,76 @@ def test_trajectory_mass_iter_boundary(
     else:
         with pytest.raises(RuntimeError, match='Mass iteration failed to converge'):
             builder.fly(performance_model, example_mission)
+
+
+def test_ground_distance_iter(performance_model, example_mission):
+    """Without ground-distance iteration, `descent_dist_approx`'s static
+    formula (18.228347 * altitude drop) does not generally match this
+    performance model's actual idle-descent ground speed -- the BOS->LAX
+    trajectory measurably undershoots the destination (~21 km short) with
+    it disabled. With it enabled, the final ground distance must match the
+    ground-track's great-circle distance almost exactly."""
+    ground_track = GroundTrack.great_circle(
+        example_mission.origin_position.location,
+        example_mission.destination_position.location,
+        allow_overstep=True,
+    )
+
+    builder_wout_iter = tb.LegacyBuilder(
+        options=tb.Options(iterate_mass=False, iterate_ground_distance=False)
+    )
+    builder_with_iter = tb.LegacyBuilder(
+        options=tb.Options(iterate_mass=False, iterate_ground_distance=True)
+    )
+
+    traj_wout_iter = builder_wout_iter.fly(performance_model, example_mission)
+    traj_with_iter = builder_with_iter.fly(performance_model, example_mission)
+
+    wout_iter_residual = abs(
+        float(traj_wout_iter.ground_distance[-1]) - ground_track.total_distance
+    )
+    with_iter_residual = abs(
+        float(traj_with_iter.ground_distance[-1]) - ground_track.total_distance
+    )
+
+    assert wout_iter_residual > 1000.0
+    assert with_iter_residual == pytest.approx(0.0, abs=1.0)
+
+
+def test_ground_distance_iter_fail(performance_model, example_mission):
+    """Test that with too few iterations to meet reltol, an error is raised."""
+    builder_fail = tb.LegacyBuilder(
+        options=tb.Options(
+            iterate_mass=False,
+            iterate_ground_distance=True,
+            max_dist_iters=1,
+            dist_iter_reltol=1e-9,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match='Ground-distance iteration failed'):
+        builder_fail.fly(performance_model, example_mission)
+
+
+def test_ground_distance_iter_unsupported_builder(performance_model, example_mission):
+    """A builder whose Context has no `descent_dist_approx` (i.e. anything
+    other than LegacyContext/AdjustableLegacyContext) must raise a clear
+    error rather than an obscure AttributeError deep in the iteration loop."""
+    builder = tb.LegacyBuilder(options=tb.Options(iterate_ground_distance=True))
+    ground_track = GroundTrack.great_circle(
+        example_mission.origin_position.location,
+        example_mission.destination_position.location,
+        allow_overstep=True,
+    )
+    builder.ctx = Context(
+        builder=builder,
+        ac_performance=performance_model,
+        mission=example_mission,
+        ground_track=ground_track,
+        initial_altitude=0.0,
+    )
+    with pytest.raises(RuntimeError, match='does not support ground-distance'):
+        builder._iterate_ground_distance()
 
 
 @pytest.mark.parametrize(
