@@ -70,6 +70,16 @@ class Mission:
     flight_level: float | None = None
     """Cruise flight level from ADS-B data (FL units), or None if not available."""
 
+    cruise_profile: list[tuple[float, float]] | None = None
+    """Observed cruise altitude profile as (cruise_distance_fraction, flight_level)
+    breakpoints, ordered by increasing fraction with the first entry at fraction 0.0.
+    Sourced from matched or probabilistically-sampled ADS-B step-climb data; None
+    falls back to a single constant cruise altitude (from flight_level, or the
+    rule-based estimate if that is also unavailable). Fractions are relative to
+    this mission's own cruise distance, not the distance of whatever flight the
+    profile was drawn from, so a profile can be reused across missions of
+    different length."""
+
     performance_model_key: str | None = None
     """Key identifying the specific performance model TOML file to use for this flight.
     Set during preprocessing from (aircraft_type, engine_type, seat_capacity) lookup.
