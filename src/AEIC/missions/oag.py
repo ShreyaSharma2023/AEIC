@@ -44,6 +44,11 @@ logger = logging.getLogger(__name__)
 EXCLUDE_EQUIPMENT = {'BUS', 'HOV', 'LCH', 'LMO', 'RFS', 'TRN'}
 
 
+def _parse_int(s: str) -> int:
+    """Parse an integer that may be float-formatted (e.g. '148.0' or '148')."""
+    return int(float(s))
+
+
 @dataclass
 class CSVEntry:
     """A single entry in the CSV OAG flight schedule data."""
@@ -124,7 +129,7 @@ class CSVEntry:
             return False
 
         # - Entries with stops. (We only want direct flights.)
-        if int(row['stops']) != 0:
+        if _parse_int(row['stops']) != 0:
             return False
 
         # - Do not include entries for non-operating carrier: this should
@@ -158,7 +163,7 @@ class CSVEntry:
                 # Special values for indeterminate effective from and to dates.
                 if t == '00000000' or t == '99999999':
                     return None
-                tint = int(t)
+                tint = _parse_int(t)
                 # YYYYMMDD
                 return date(tint // 10000, tint % 10000 // 100, tint % 100)
 
@@ -196,14 +201,14 @@ class CSVEntry:
                 arrtim=make_time(row['arrtim']),
                 arrday=convert_arrday(row['arrday']),
                 days=days,
-                distance=int(row['distance']),
+                distance=_parse_int(row['distance']),
                 service=row['service'],
                 inpacft=row['inpacft'],
-                seats=int(row['seats']),
+                seats=_parse_int(row['seats']),
                 efffrom=make_date(row['efffrom']),
                 effto=make_date(row['effto']),
-                stops=int(row['stops']),
-                longest=(row['longest'] == 'L'),
+                stops=_parse_int(row['stops']),
+                longest=(row.get('longest', 'L') == 'L'),
             )
         except Exception:
             logger.exception(f'Failed to convert row: {row}')

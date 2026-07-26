@@ -1,9 +1,11 @@
 import logging
 import os
+from pathlib import Path
 
 import click
 
 import AEIC.missions.oag as oag
+from AEIC.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -48,4 +50,10 @@ def convert_oag_data(warnings_file, year, in_file, db_file):
         raise RuntimeError(f'Database file {db_file} already exists.')
 
     logging.basicConfig(level=logging.INFO)
+
+    # Load AEIC config (needed for airport data lookup).
+    aeic_path = Path(os.environ['AEIC_PATH'])
+    config_file = aeic_path / 'config' / 'config.toml'
+    Config.load(config_file=config_file if config_file.exists() else None)
+
     oag.convert_oag_data(in_file, year, db_file, warnings_file)
