@@ -1,4 +1,4 @@
-from .adjustable_legacy import AdjustableLegacyBuilder
+from .adjustable_legacy import AdjustableLegacyBuilder, AdjustableLegacyOptions
 from .ads_b import ADSBBuilder, ADSBOptions
 from .base import Builder, Context, Options
 from .dymos import DymosBuilder, DymosOptions
@@ -18,4 +18,5 @@ __all__ = [
     'LegacyBuilder',
     'LegacyOptions',
     'AdjustableLegacyBuilder',
+    'AdjustableLegacyOptions',
 ]

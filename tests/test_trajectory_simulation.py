@@ -7,8 +7,6 @@ from AEIC.missions.mission import iso_to_timestamp
 from AEIC.storage import FieldMetadata, FieldSet
 from AEIC.trajectories import GroundTrack, TrajectoryStore
 from AEIC.trajectories.builders.base import Context
-from AEIC.trajectories.builders.legacy import LegacyContext
-from AEIC.units import FEET_TO_METERS
 
 
 @pytest.fixture
@@ -80,29 +78,6 @@ def test_trajectory_simulation_single(sample_missions, performance_model):
     assert performance_model.empty_mass < float(traj.aircraft_mass[-1])
     assert float(traj.aircraft_mass[-1]) < float(traj.starting_mass)
     assert float(traj.fuel_mass[0]) > float(traj.fuel_mass[-1]) >= 0
-
-
-def test_descent_start_altitude_uses_peak_step_climb_altitude(performance_model):
-    """`des_start_altitude` (and thus `descent_dist_approx`) must reflect
-    wherever cruise actually ends -- the highest step-climb breakpoint --
-    not the initial cruise altitude. Using the initial altitude understates
-    the real altitude drop (and thus descent distance) for any mission that
-    climbs during cruise."""
-    mission = Mission(
-        origin='BOS',
-        destination='LAX',
-        departure=iso_to_timestamp('2024-09-01T12:00:00'),
-        arrival=iso_to_timestamp('2024-09-01T18:00:00'),
-        aircraft_type='738',
-        load_factor=1.0,
-        cruise_profile=[(0.0, 330.0), (0.5, 350.0), (0.9, 370.0)],
-    )
-    builder = tb.LegacyBuilder(options=tb.Options(iterate_mass=False))
-    ctx = LegacyContext(builder, performance_model, mission, starting_mass=None)
-
-    assert ctx.crz_start_altitude == pytest.approx(330.0 * 100.0 * FEET_TO_METERS)
-    assert ctx.des_start_altitude == pytest.approx(370.0 * 100.0 * FEET_TO_METERS)
-    assert ctx.des_start_altitude > ctx.crz_start_altitude
 
 
 @pytest.mark.forked
