@@ -1223,8 +1223,41 @@ class TrajectoryStore:
                         )
 
                 # Create a variable of the appropriate NetCDF type, indexed by
-                # the calculated dimension set.
-                v = g.createVariable(field_name, field_type, metadata.dimensions.netcdf)
+                # the calculated dimension set. For per-trajectory variables
+                # (non-POINT), use chunk_size=1000 on the unlimited trajectory
+                # dimension to batch HDF5 metadata writes and avoid one NFS
+                # write per trajectory per variable.
+                _dim_names = metadata.dimensions.netcdf
+                if _dim_names and Dimension.POINT not in metadata.dimensions:
+                    _chunksizes = tuple(
+                        1000
+                        if dataset.dimensions[d].isunlimited()
+                        else dataset.dimensions[d].size
+                        for d in _dim_names
+                    )
+                    v = g.createVariable(
+                        field_name, field_type, _dim_names, chunksizes=_chunksizes
+                    )
+                else:
+                    # VL (per-point) variable: set chunk_size=256 on unlimited
+                    # trajectory dimension to reduce chunk allocations.
+                    if _dim_names and any(
+                        dataset.dimensions[d].isunlimited() for d in _dim_names
+                    ):
+                        _vl_chunksizes = tuple(
+                            256
+                            if dataset.dimensions[d].isunlimited()
+                            else dataset.dimensions[d].size
+                            for d in _dim_names
+                        )
+                        v = g.createVariable(
+                            field_name,
+                            field_type,
+                            _dim_names,
+                            chunksizes=_vl_chunksizes,
+                        )
+                    else:
+                        v = g.createVariable(field_name, field_type, _dim_names)
 
                 # Add metadata to variable.
                 v.description = metadata.description
@@ -1239,9 +1272,11 @@ class TrajectoryStore:
         # If we're indexing, we need to create the index group and variables.
         if self.indexable and self.index_group is None:
             self.index_group = dataset.createGroup('_index')
-            self.index_group.createVariable('flight_id', np.int64, ('trajectory',))
             self.index_group.createVariable(
-                'trajectory_index', np.int64, ('trajectory',)
+                'flight_id', np.int64, ('trajectory',), chunksizes=(1000,)
+            )
+            self.index_group.createVariable(
+                'trajectory_index', np.int64, ('trajectory',), chunksizes=(1000,)
             )
 
         # Save information about file for lookup by field set name. This is how
@@ -2087,7 +2122,7 @@ class TrajectoryStore:
                     val = getattr(data, name)
 
                 self._write_to_nc_var(var, index, name, field, val)
-                nc_file.traj_var[0][index] = index
+            nc_file.traj_var[0][index] = index
 
     def _write_to_nc_var(
         self,
@@ -2120,16 +2155,34 @@ class TrajectoryStore:
                 for ti, tm in enumerate(ThrustMode):
                     var[index, ti] = val[tm]
             case (True, False):
-                # SpeciesValues[float], SpeciesValues[np.ndarray]
+                if Dimension.POINT in field.dimensions:
+                    # VL per-waypoint arrays — write element-by-element
+                    for si, sp in enumerate(Species):
+                        if sp in val:
+                            var[index, si] = val[sp]
+                else:
+                    # Scalar per species — single numpy slice write. The
+                    # species dimension size is whatever this store was
+                    # created with (_create_dimensions takes an explicit
+                    # species list), which can be a subset of the full
+                    # Species enum -- size the array from the variable's
+                    # actual dimension, not len(Species), or a store with
+                    # fewer species than the full enum fails to write.
+                    arr = np.full(var.shape[1], np.nan)
+                    for si, sp in enumerate(Species):
+                        if sp in val:
+                            arr[si] = float(val[sp])
+                    var[index] = arr
+            case (True, True):
+                # SpeciesValues[ThrustModeValues] — single numpy slice write.
+                # Same reasoning as above: size from the variable itself.
+                arr = np.full((var.shape[1], var.shape[2]), np.nan)
                 for si, sp in enumerate(Species):
                     if sp in val:
-                        var[index, si] = val[sp]
-            case (True, True):
-                # SpeciesValues[ThrustModeValues]
-                for si, sp in enumerate(Species):
-                    for ti, tm in enumerate(ThrustMode):
-                        if sp in val and tm in val[sp]:
-                            var[index, si, ti] = val[sp][tm]
+                        for ti, tm in enumerate(ThrustMode):
+                            if tm in val[sp]:
+                                arr[si, ti] = float(val[sp][tm])
+                var[index] = arr
 
     def _read_from_nc_var(
         self,
@@ -2386,7 +2439,11 @@ def _create_dimensions(
     traj_dim = dataset.createDimension('trajectory', None)
 
     # Coordinate variable for trajectory dimension.
-    traj_var = dataset.createVariable('trajectory', np.int64, ('trajectory',))
+    # chunk_size=1000: reduces HDF5 metadata writes on NFS from one-per-add
+    # to one-per-1000-adds, giving ~1000x fewer small writes.
+    traj_var = dataset.createVariable(
+        'trajectory', np.int64, ('trajectory',), chunksizes=(1000,)
+    )
 
     # Create species and thrust mode dimensions and coordinate variables if
     # required.
