@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -6,7 +8,7 @@ from AEIC.performance.models.legacy import ROCDFilter
 from AEIC.performance.types import AircraftState, SimpleFlightRules
 from AEIC.trajectories import GroundTrack
 from AEIC.trajectories.builders.adjustable_legacy import AdjustableLegacyContext
-from AEIC.units import FL_TO_METERS
+from AEIC.units import FEET_TO_METERS, FL_TO_METERS
 
 
 def _ground_track(mission):
@@ -247,3 +249,50 @@ def test_invalid_adjustments_raise_value_error(
         tb.AdjustableLegacyBuilder(options=tb.Options(iterate_mass=False)).fly(
             performance_model, sample_missions[0], **kwargs
         )
+
+
+def test_adjustable_legacy_descent_start_altitude_uses_peak_step_climb_altitude(
+    sample_missions, performance_model
+):
+    """Ported version of the same fix in `LegacyContext`: `des_start_altitude`
+    (and thus `descent_dist_approx`) must reflect the highest step-climb
+    breakpoint, not the initial cruise altitude, when no explicit
+    `cruise_altitude` adjustment is given."""
+    mission = replace(
+        sample_missions[0],
+        cruise_profile=[(0.0, 330.0), (0.5, 350.0), (0.9, 370.0)],
+    )
+    builder = tb.AdjustableLegacyBuilder(options=tb.Options(iterate_mass=False))
+    ctx = AdjustableLegacyContext(
+        builder, performance_model, mission, starting_mass=None
+    )
+
+    assert ctx.crz_start_altitude == pytest.approx(330.0 * 100.0 * FEET_TO_METERS)
+    assert ctx.des_start_altitude == pytest.approx(370.0 * 100.0 * FEET_TO_METERS)
+    assert ctx.des_start_altitude > ctx.crz_start_altitude
+
+
+def test_adjustable_legacy_step_climb_matches_legacy(
+    sample_missions, performance_model
+):
+    """With an observed `cruise_profile` and no adjustments, the adjustable
+    builder should fly the same step-climb trajectory as the plain legacy
+    builder -- confirming the ported `fly_cruise`/`_fly_level_change` logic
+    behaves identically."""
+    mission = replace(
+        sample_missions[0],
+        cruise_profile=[(0.0, 330.0), (0.5, 350.0), (0.9, 370.0)],
+    )
+    options = tb.Options(iterate_mass=False)
+
+    legacy_traj = tb.LegacyBuilder(options=options).fly(performance_model, mission)
+    adjustable_traj = tb.AdjustableLegacyBuilder(options=options).fly(
+        performance_model, mission
+    )
+
+    assert adjustable_traj.approx_eq(legacy_traj)
+    expected_max_altitude = 370.0 * 100.0 * FEET_TO_METERS
+    assert np.max(adjustable_traj.altitude) == pytest.approx(expected_max_altitude)
+    assert adjustable_traj.n_climb == legacy_traj.n_climb
+    assert adjustable_traj.n_cruise == legacy_traj.n_cruise
+    assert adjustable_traj.n_descent == legacy_traj.n_descent
