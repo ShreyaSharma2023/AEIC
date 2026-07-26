@@ -34,50 +34,6 @@ class LegacyOptions:
     fuel_LHV: float = 43.8e6
     """Lower heating value of the fuel used (J/kg)."""
 
-    step_climb_min_distance_km: float | None = None
-    """If set, missions without an explicit Mission.cruise_profile whose
-    ground-track distance is at least this far automatically get a
-    synthesized, evenly-spaced step-climb profile instead of a single
-    constant cruise altitude. None (default) disables this and preserves the
-    original single-FL behavior. This is a simple rule-based comparison tool,
-    not a replacement for an empirically-sourced profile."""
-
-    step_climb_interval_km: float = 2000.0 * NAUTICAL_MILES_TO_METERS / 1000.0
-    """Approximate ground distance between synthesized step climbs (km).
-    Only used when step_climb_min_distance_km is set."""
-
-    step_climb_size_ft: float = 2000.0
-    """Altitude gained per synthesized step climb (ft). Only used when
-    step_climb_min_distance_km is set."""
-
-
-def synthesize_step_climb_profile(
-    start_fl: float,
-    mission_distance_km: float,
-    interval_km: float,
-    step_size_ft: float,
-    ceiling_fl: float,
-) -> list[tuple[float, float]]:
-    """Build an evenly-spaced synthetic step-climb schedule: one step of
-    `step_size_ft` roughly every `interval_km`, starting from `start_fl` and
-    never exceeding `ceiling_fl`. Steps are placed at even fractions of the
-    mission distance. Returns a Mission.cruise_profile-compatible list.
-
-    This is a rule-based placeholder for exploring/comparing against
-    single-FL trajectories -- it does not reflect observed step-climb
-    behavior (see Mission.cruise_profile for that)."""
-
-    n_by_distance = max(0, int(mission_distance_km // interval_km))
-    n_by_ceiling = max(0, int((ceiling_fl - start_fl) // (step_size_ft / 100.0)))
-    n_steps = min(n_by_distance, n_by_ceiling)
-
-    profile = [(0.0, start_fl)]
-    for i in range(1, n_steps + 1):
-        frac = i / (n_steps + 1)
-        fl = start_fl + i * (step_size_ft / 100.0)
-        profile.append((frac, fl))
-    return profile
-
 
 class LegacyContext(Context):
     """Context for legacy trajectory builder."""
@@ -121,29 +77,14 @@ class LegacyContext(Context):
         if self.clm_start_altitude >= ac_performance.maximum_altitude:
             self.clm_start_altitude = mission.origin_position.altitude
 
-        # Use an observed step-climb profile when available (first breakpoint
-        # gives the initial cruise altitude); else use a single observed
-        # cruise FL when available; else fall back to rule-based estimate.
-        self.cruise_profile = mission.cruise_profile
-        if self.cruise_profile is not None:
-            self.crz_start_altitude = self.cruise_profile[0][1] * 100.0 * FEET_TO_METERS
-        elif mission.flight_level is not None:
+        # Use observed cruise FL when available; fall back to rule-based estimate.
+        if mission.flight_level is not None:
             self.crz_start_altitude = mission.flight_level * 100.0 * FEET_TO_METERS
         else:
             # Cruise altitude is the operating ceiling - 7000 feet.
             self.crz_start_altitude = (
                 ac_performance.maximum_altitude - 7000.0 * FEET_TO_METERS
             )
-
-        # Clamp any borrowed/observed profile altitudes to this aircraft's
-        # actual ceiling -- a probabilistically-matched profile may have come
-        # from a different (e.g. heavier) variant with a higher service
-        # ceiling than the one flying this mission.
-        if self.cruise_profile is not None:
-            self.cruise_profile = [
-                (frac, min(fl, ac_performance.maximum_altitude * METERS_TO_FL))
-                for frac, fl in self.cruise_profile
-            ]
 
         # Ensure cruise altitude is above the starting altitude.
         if self.crz_start_altitude < self.clm_start_altitude:
@@ -154,38 +95,9 @@ class LegacyContext(Context):
         if self.crz_start_altitude > ac_performance.maximum_altitude:
             self.crz_start_altitude = ac_performance.maximum_altitude
 
-        # Optionally auto-synthesize a rule-based step-climb profile for
-        # sufficiently long missions that don't already carry an observed one.
-        # This is a comparison/exploration tool (single fixed step size and
-        # spacing) -- NOT a substitute for an empirically-sourced profile via
-        # Mission.cruise_profile. Off by default (step_climb_min_distance_km
-        # is None), so existing single-FL behavior is unaffected unless
-        # explicitly enabled via LegacyOptions.
-        if (
-            self.cruise_profile is None
-            and builder.step_climb_min_distance_km is not None
-            and ground_track.total_distance
-            >= builder.step_climb_min_distance_km * 1000.0
-        ):
-            self.cruise_profile = synthesize_step_climb_profile(
-                start_fl=self.crz_start_altitude * METERS_TO_FL,
-                mission_distance_km=ground_track.total_distance / 1000.0,
-                interval_km=builder.step_climb_interval_km,
-                step_size_ft=builder.step_climb_size_ft,
-                ceiling_fl=ac_performance.maximum_altitude * METERS_TO_FL,
-            )
-
-        # Descent starts wherever cruise actually leaves off. With a step-
-        # climb profile that is the last (highest) breakpoint, not the
-        # initial cruise altitude (crz_start_altitude) -- using the latter
-        # understates the real altitude drop, and thus descent_dist_approx
-        # below, for any mission that climbs during cruise.
-        if self.cruise_profile is not None:
-            self.des_start_altitude = (
-                max(fl for _, fl in self.cruise_profile) * 100.0 * FEET_TO_METERS
-            )
-        else:
-            self.des_start_altitude = self.crz_start_altitude
+        # In legacy trajectory, descent start altitude is equal to cruise
+        # altitude.
+        self.des_start_altitude = self.crz_start_altitude
 
         # Set descent altitude based on 3000' above arrival airport altitude;
         # clamp to aircraft operating ceiling if needed.
@@ -257,10 +169,6 @@ class LegacyBuilder(Builder):
         self.cruise_step = legacy_options.cruise_step
 
         self.fuel_LHV = legacy_options.fuel_LHV
-
-        self.step_climb_min_distance_km = legacy_options.step_climb_min_distance_km
-        self.step_climb_interval_km = legacy_options.step_climb_interval_km
-        self.step_climb_size_ft = legacy_options.step_climb_size_ft
 
     def calc_starting_mass(self) -> float:
         """Calculates the starting mass using AEIC v2 methods.
@@ -371,43 +279,30 @@ class LegacyBuilder(Builder):
         flight_phase: FlightPhase,
         flight_rule: SimpleFlightRules,
         final_altitude: float,
-        start_pt=None,
     ) -> None:
         """Simulate climb and descent phases.
 
         Computes state over segments involving level changes using AEIC v2
-        methods based on BADA-3 formulas.
-
-        `flight_phase` only controls how the resulting points are labelled
-        (and, for the initial climb, whether a fresh start point is created);
-        whether this is actually a climb or a descent is determined by
-        comparing `final_altitude` to the current altitude, so this can also
-        be used for a step climb in the middle of a phase labelled CRUISE
-        (via `start_pt`, to continue from the existing in-progress point
-        instead of resetting to the flight's origin)."""
+        methods based on BADA-3 formulas."""
 
         traj.set_phase(flight_phase)
 
         # Start climb at overall flight start point and start descent at end of
-        # cruise point, unless an explicit starting point has been provided
-        # (used for a level change in the middle of an existing phase, e.g. a
-        # cruise step climb).
-        if start_pt is not None:
-            pt = start_pt
-        elif flight_phase == FlightPhase.CLIMB:
+        # cruise point.
+        if flight_phase == FlightPhase.CLIMB:
             pt = self._start_point(traj)
             traj.append(pt)
         else:
             pt = traj.make_point(-1)
-
-        climbing = final_altitude >= pt.altitude
 
         # Flight phase is discretized into constant altitude steps with a
         # possible extra "short step" at the end to reach the target altitude.
         altitudes = np.arange(
             pt.altitude,
             final_altitude,
-            self.altitude_step if climbing else -self.altitude_step,
+            self.altitude_step
+            if flight_phase == FlightPhase.CLIMB
+            else -self.altitude_step,
         )
         # Snap floating-point step accumulation to the exact endpoint
         # to avoid a near-zero extra segment.
@@ -466,40 +361,37 @@ class LegacyBuilder(Builder):
             pt.latitude = gpt.location.latitude
             pt.azimuth = gpt.azimuth
 
-            # Calculate fuel required for acceleration. This is keyed off
-            # whether this segment is actually climbing (not off
-            # `flight_phase`, which only controls point labelling) so that a
-            # step climb flown mid-cruise still gets the same acceleration
-            # accounting as the initial climb.
-            if climbing:
-                # Account for acceleration/deceleration over the segment
-                # using end-of-segment tas approximated using start of
-                # segment TAS, ROCD and mass and end-of-segment altitude.
-                perf_end = self.ac_performance.evaluate(
-                    AircraftState(
-                        altitude=end_altitude,  # type: ignore
-                        true_airspeed=pt.true_airspeed,  # type: ignore
-                        rate_of_climb=pt.rate_of_climb,  # type: ignore
-                        aircraft_mass=pt.aircraft_mass,  # type: ignore
-                    ),
-                    flight_rule,
-                )
+            # Calculate fuel required for acceleration.
+            match flight_phase:
+                case FlightPhase.CLIMB:
+                    # Account for acceleration/deceleration over the segment
+                    # using end-of-segment tas approximated using start of
+                    # segment TAS, ROCD and mass and end-of-segment altitude.
+                    perf_end = self.ac_performance.evaluate(
+                        AircraftState(
+                            altitude=end_altitude,  # type: ignore
+                            true_airspeed=pt.true_airspeed,  # type: ignore
+                            rate_of_climb=pt.rate_of_climb,  # type: ignore
+                            aircraft_mass=pt.aircraft_mass,  # type: ignore
+                        ),
+                        flight_rule,
+                    )
 
-                kinetic_energy_chg = (
-                    0.5
-                    * pt.aircraft_mass
-                    * (perf_end.true_airspeed**2 - perf.true_airspeed**2)
-                )
+                    kinetic_energy_chg = (
+                        0.5
+                        * pt.aircraft_mass
+                        * (perf_end.true_airspeed**2 - perf.true_airspeed**2)
+                    )
 
-                # NOTE: I have no idea where AEIC v2 got the efficiency of
-                # 0.15 from.
-                efficiency = 0.15
-                accel_fuel = kinetic_energy_chg / self.fuel_LHV / efficiency
-                seg_fuel += accel_fuel
-            else:
-                # For descent, assumed fuel flow is essentially just engine
-                # at idle.
-                pass
+                    # NOTE: I have no idea where AEIC v2 got the efficiency of
+                    # 0.15 from.
+                    efficiency = 0.15
+                    accel_fuel = kinetic_energy_chg / self.fuel_LHV / efficiency
+                    seg_fuel += accel_fuel
+                case FlightPhase.DESCENT:
+                    # For descent, assumed fuel flow is essentially just engine
+                    # at idle.
+                    pass
 
             # We cannot gain fuel by decelerating in a conventional fuel
             # aircraft.
@@ -523,11 +415,7 @@ class LegacyBuilder(Builder):
         """Simulate cruise phase.
 
         Computes state over cruise segment using AEIC v2 methods based on
-        BADA-3 formulas. If the mission carries an observed cruise altitude
-        profile (`self.cruise_profile`), cruise is flown as a sequence of
-        constant-altitude segments connected by short climbs at the observed
-        breakpoints, instead of a single constant altitude for the whole
-        phase."""
+        BADA-3 formulas."""
 
         traj.set_phase(FlightPhase.CRUISE)
 
@@ -535,69 +423,26 @@ class LegacyBuilder(Builder):
         # be replaced).
         pt = traj.make_point(-1)
 
-        # Cruise at constant altitude (first profile breakpoint, if any).
+        # Cruise at constant altitude.
         pt.altitude = self.crz_start_altitude
         pt.flight_level = self.crz_start_altitude * METERS_TO_FL
 
         # Cruise end distance based on estimated descent distance.
         end_dist = self.ground_track.total_distance - self.descent_dist_approx
-        cruise_start_dist = pt.ground_distance
 
         # If there is not enough distance to fly before starting descent, skip
         # cruise phase.
-        if cruise_start_dist >= end_dist:
+        if pt.ground_distance >= end_dist:
             return
-
-        # Top of climb, entering cruise.
-        pt.rate_of_climb = 0
-
-        cruise_len = end_dist - cruise_start_dist
-
-        # Build the list of (distance, altitude) breakpoints where cruise
-        # should step to a new altitude. With no observed profile this is
-        # just the single starting altitude held to the end of cruise
-        # (original behaviour, unchanged).
-        if self.cruise_profile is not None:
-            level_changes = [
-                (cruise_start_dist + frac * cruise_len, fl * 100.0 * FEET_TO_METERS)
-                for frac, fl in self.cruise_profile[1:]
-                # A profile drawn from a longer real flight can specify
-                # breakpoints beyond what this mission's cruise distance
-                # can reach -- truncate rather than climbing past top of
-                # descent.
-                if cruise_start_dist + frac * cruise_len < end_dist
-            ]
-        else:
-            level_changes = []
-
-        for target_dist, target_altitude in level_changes:
-            self._fly_cruise_segment(traj, pt, target_dist)
-            # Observed cruise profiles are step *climbs*; a target at or
-            # below the current altitude is not something this builder
-            # attempts to fly (real step-downs mid-cruise are rare/data
-            # artifacts) -- skip rather than mis-handle it as a climb.
-            if target_altitude > pt.altitude:
-                self._fly_level_change(
-                    traj,
-                    FlightPhase.CRUISE,
-                    SimpleFlightRules.CLIMB,
-                    target_altitude,
-                    start_pt=pt,
-                )
-                pt = traj.make_point(-1)
-                pt.rate_of_climb = 0
-
-        self._fly_cruise_segment(traj, pt, end_dist)
-
-    def _fly_cruise_segment(self, traj: Trajectory, pt, end_dist: float) -> None:
-        """Fly a single constant-altitude cruise segment from the current
-        point up to `end_dist`, appending points to `traj`."""
 
         # Cruise is discretized into ground distance steps with a possible
         # extra "short step" at the end to reach the target distance.
         distances = np.arange(pt.ground_distance, end_dist, self.cruise_step)
-        if len(distances) == 0 or distances[-1] != end_dist:
+        if distances[-1] != end_dist:
             distances = np.append(distances, end_dist)
+
+        # Top of climb, entering cruise.
+        pt.rate_of_climb = 0
 
         # Get fuel flow, ground speed, etc. for cruise segments.
         for distance in distances[1:]:

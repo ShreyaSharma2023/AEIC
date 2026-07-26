@@ -272,30 +272,33 @@ def test_adjustable_legacy_descent_start_altitude_uses_peak_step_climb_altitude(
     assert ctx.des_start_altitude > ctx.crz_start_altitude
 
 
-def test_adjustable_legacy_step_climb_matches_legacy(
-    sample_missions, performance_model
-):
-    """With an observed `cruise_profile` and no adjustments, the adjustable
-    builder should fly the same step-climb trajectory as the plain legacy
-    builder -- confirming the ported `fly_cruise`/`_fly_level_change` logic
-    behaves identically."""
+def test_adjustable_legacy_flies_step_climb_profile(sample_missions, performance_model):
+    """Step-climb cruise-profile support lives only in the adjustable
+    builder now (LegacyBuilder was reverted to its plain single-altitude
+    cruise behavior). With an observed `cruise_profile` and no adjustments,
+    the adjustable builder should climb through each breakpoint and top out
+    at the highest one."""
     mission = replace(
         sample_missions[0],
         cruise_profile=[(0.0, 330.0), (0.5, 350.0), (0.9, 370.0)],
     )
     options = tb.Options(iterate_mass=False)
 
-    legacy_traj = tb.LegacyBuilder(options=options).fly(performance_model, mission)
+    plain_traj = tb.AdjustableLegacyBuilder(options=options).fly(
+        performance_model, replace(sample_missions[0], cruise_profile=None)
+    )
     adjustable_traj = tb.AdjustableLegacyBuilder(options=options).fly(
         performance_model, mission
     )
 
-    assert adjustable_traj.approx_eq(legacy_traj)
     expected_max_altitude = 370.0 * 100.0 * FEET_TO_METERS
     assert np.max(adjustable_traj.altitude) == pytest.approx(expected_max_altitude)
-    assert adjustable_traj.n_climb == legacy_traj.n_climb
-    assert adjustable_traj.n_cruise == legacy_traj.n_cruise
-    assert adjustable_traj.n_descent == legacy_traj.n_descent
+    # A step-climb profile flies strictly higher than the single-altitude
+    # baseline for the same mission.
+    assert np.max(adjustable_traj.altitude) > np.max(plain_traj.altitude)
+    assert adjustable_traj.n_cruise > 0
+    assert adjustable_traj.n_climb > 0
+    assert adjustable_traj.n_descent > 0
 
 
 def test_adjustable_legacy_ground_distance_iter(sample_missions, performance_model):

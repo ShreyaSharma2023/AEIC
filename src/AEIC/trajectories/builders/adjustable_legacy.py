@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
@@ -23,7 +24,64 @@ from AEIC.weather import Weather
 
 from .. import GroundTrack, Trajectory
 from .base import Builder, Context, Options
-from .legacy import LegacyOptions, synthesize_step_climb_profile
+
+
+@dataclass
+class AdjustableLegacyOptions:
+    """Additional options for the adjustable legacy trajectory builder."""
+
+    altitude_step: float = 1000 * FEET_TO_METERS
+    """Altitude step to use in climb and descent phases (m)."""
+
+    cruise_step: float = 125 * NAUTICAL_MILES_TO_METERS
+    """Ground distance step to use in cruise phase (m)."""
+
+    fuel_LHV: float = 43.8e6
+    """Lower heating value of the fuel used (J/kg)."""
+
+    step_climb_min_distance_km: float | None = None
+    """If set, missions without an explicit Mission.cruise_profile whose
+    ground-track distance is at least this far automatically get a
+    synthesized, evenly-spaced step-climb profile instead of a single
+    constant cruise altitude. None (default) disables this and preserves the
+    original single-FL behavior. This is a simple rule-based comparison tool,
+    not a replacement for an empirically-sourced profile."""
+
+    step_climb_interval_km: float = 2000.0 * NAUTICAL_MILES_TO_METERS / 1000.0
+    """Approximate ground distance between synthesized step climbs (km).
+    Only used when step_climb_min_distance_km is set."""
+
+    step_climb_size_ft: float = 2000.0
+    """Altitude gained per synthesized step climb (ft). Only used when
+    step_climb_min_distance_km is set."""
+
+
+def synthesize_step_climb_profile(
+    start_fl: float,
+    mission_distance_km: float,
+    interval_km: float,
+    step_size_ft: float,
+    ceiling_fl: float,
+) -> list[tuple[float, float]]:
+    """Build an evenly-spaced synthetic step-climb schedule: one step of
+    `step_size_ft` roughly every `interval_km`, starting from `start_fl` and
+    never exceeding `ceiling_fl`. Steps are placed at even fractions of the
+    mission distance. Returns a Mission.cruise_profile-compatible list.
+
+    This is a rule-based placeholder for exploring/comparing against
+    single-FL trajectories -- it does not reflect observed step-climb
+    behavior (see Mission.cruise_profile for that)."""
+
+    n_by_distance = max(0, int(mission_distance_km // interval_km))
+    n_by_ceiling = max(0, int((ceiling_fl - start_fl) // (step_size_ft / 100.0)))
+    n_steps = min(n_by_distance, n_by_ceiling)
+
+    profile = [(0.0, start_fl)]
+    for i in range(1, n_steps + 1):
+        frac = i / (n_steps + 1)
+        fl = start_fl + i * (step_size_ft / 100.0)
+        profile.append((frac, fl))
+    return profile
 
 
 class AdjustableLegacyContext(Context):
@@ -290,8 +348,8 @@ class AdjustableLegacyBuilder(Builder):
 
     Args:
         options (Options): Base options for trajectory building.
-        legacy_options (LegacyOptions): Builder-specific options for legacy
-            trajectory builder.
+        adjustable_legacy_options (AdjustableLegacyOptions): Builder-specific
+            options for the adjustable legacy trajectory builder.
     """
 
     CONTEXT_CLASS = AdjustableLegacyContext
@@ -299,21 +357,23 @@ class AdjustableLegacyBuilder(Builder):
     def __init__(
         self,
         options: Options = Options(),
-        legacy_options: LegacyOptions = LegacyOptions(),
+        adjustable_legacy_options: AdjustableLegacyOptions = AdjustableLegacyOptions(),
     ):
         super().__init__(options)
 
         # Altitude step to use in climb and descent phases of flight.
-        self.altitude_step = legacy_options.altitude_step
+        self.altitude_step = adjustable_legacy_options.altitude_step
 
         # Ground distance step to use in cruise phase.
-        self.cruise_step = legacy_options.cruise_step
+        self.cruise_step = adjustable_legacy_options.cruise_step
 
-        self.fuel_LHV = legacy_options.fuel_LHV
+        self.fuel_LHV = adjustable_legacy_options.fuel_LHV
 
-        self.step_climb_min_distance_km = legacy_options.step_climb_min_distance_km
-        self.step_climb_interval_km = legacy_options.step_climb_interval_km
-        self.step_climb_size_ft = legacy_options.step_climb_size_ft
+        self.step_climb_min_distance_km = (
+            adjustable_legacy_options.step_climb_min_distance_km
+        )
+        self.step_climb_interval_km = adjustable_legacy_options.step_climb_interval_km
+        self.step_climb_size_ft = adjustable_legacy_options.step_climb_size_ft
 
     def calc_starting_mass(self) -> float:
         """Calculates the starting mass using AEIC v2 methods.
