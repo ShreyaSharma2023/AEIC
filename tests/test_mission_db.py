@@ -335,7 +335,7 @@ def test_mission_from_query_result_row():
     # (departure_ts, arrival_ts, schedule_id, flight_id, carrier,
     #  flight_number, origin_iata, origin_country, destination_iata,
     #  destination_country, service_type, aircraft_type, engine_type,
-    #  distance, seat_capacity)
+    #  distance, seat_capacity, flight_level, performance_model_key)
     dep_ts = int(date_to_timestamp(date(2024, 6, 1)).timestamp())
     arr_ts = dep_ts + 6 * 3600
     row = (
@@ -354,6 +354,8 @@ def test_mission_from_query_result_row():
         'CFM56',
         4170,
         180,
+        350.0,  # flight_level
+        'legacy',  # performance_model_key
     )
 
     mission = QueryResult.from_row(row)
@@ -372,6 +374,8 @@ def test_mission_from_query_result_row():
     assert mission.flight_id == 4242
     # OAG data has no load factor, so the SUT inserts 1.0 as a placeholder.
     assert mission.load_factor == 1.0
+    assert mission.flight_level == 350.0
+    assert mission.performance_model_key == 'legacy'
     # Timestamps survive the int → UTC pd.Timestamp round-trip.
     assert mission.departure == pd.Timestamp(dep_ts, unit='s', tz='UTC')
     assert mission.arrival == pd.Timestamp(arr_ts, unit='s', tz='UTC')

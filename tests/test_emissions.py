@@ -235,9 +235,16 @@ def test_compute_emissions_pipeline_wiring(perf_model, trajectory, emissions):
         )
     fuel_burn = emissions.fuel_burn_per_segment[idx_slice]
     for field in emissions.trajectory_emissions:
+        # emissions[i] uses the EI at waypoint i-1 (start of the segment)
+        # multiplied by the fuel burned reaching waypoint i, not the EI at
+        # waypoint i itself (see get_trajectory_emissions). The first point
+        # in the slice has no preceding in-slice EI, so it stays 0.
+        sliced_indices = emissions.trajectory_indices[field][idx_slice]
+        expected_emissions = np.zeros_like(fuel_burn)
+        expected_emissions[1:] = sliced_indices[:-1] * fuel_burn[1:]
         np.testing.assert_allclose(
             emissions.trajectory_emissions[field][idx_slice],
-            emissions.trajectory_indices[field][idx_slice] * fuel_burn,
+            expected_emissions,
         )
     np.testing.assert_allclose(
         emissions.trajectory_indices[Species.NO][idx_slice],
