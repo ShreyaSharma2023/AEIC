@@ -50,6 +50,43 @@ def test_weather_init_with_bad_str():
         )
 
 
+def test_eastbound_faster_than_westbound_with_uniform_tailwind(tmp_path):
+    """Regression test for a sin/cos swap bug where compass-bearing azimuth
+    was treated as a math angle, causing a due-east heading to pick up wind
+    as if flying north. With a uniform eastward wind (wind_u=50, wind_v=0),
+    a due-east flight must be faster than a due-west flight over the same
+    ground track."""
+    _write_mean_file(tmp_path / 'annual.nc', with_valid_time=False)
+    ds = xr.open_dataset(tmp_path / 'annual.nc')
+    ds = ds.assign(
+        u=(ds['u'].dims, np.full(ds['u'].shape, 50.0, dtype=np.float32)),
+        v=(ds['v'].dims, np.full(ds['v'].shape, 0.0, dtype=np.float32)),
+    )
+    ds.to_netcdf(tmp_path / 'annual2.nc')
+
+    w = Weather(
+        data_dir=tmp_path,
+        file_resolution=TemporalResolution.ANNUAL,
+        file_format='annual2.nc',
+    )
+    tas = 200.0
+    gs_eastbound = w.get_ground_speed(
+        time=pd.Timestamp('2024-06-15'),
+        gt_point=GroundTrack.Point(location=_PROBE_LOCATION, azimuth=90.0),
+        altitude=_PROBE_ALT,
+        true_airspeed=tas,
+    )
+    gs_westbound = w.get_ground_speed(
+        time=pd.Timestamp('2024-06-15'),
+        gt_point=GroundTrack.Point(location=_PROBE_LOCATION, azimuth=270.0),
+        altitude=_PROBE_ALT,
+        true_airspeed=tas,
+    )
+    assert gs_eastbound == pytest.approx(tas + 50.0, rel=1e-4)
+    assert gs_westbound == pytest.approx(tas - 50.0, rel=1e-4)
+    assert gs_eastbound > gs_westbound
+
+
 @pytest.mark.forked
 def test_compute_ground_speed(sample_weather, ground_track):
     # Integration smoke test against the real ERA5 fixture (2024-09-01.nc). The
@@ -85,11 +122,12 @@ _PROBE_LOCATION = Location(longitude=-75.0, latitude=40.0)
 _PROBE_POINT = GroundTrack.Point(location=_PROBE_LOCATION, azimuth=0.0)
 _PROBE_ALT = 9144.0  # ~300 hPa by ISA
 _PROBE_TAS = 200.0
-# Constants in synthetic fields; with azimuth=0, cos=1 sin=0 →
-# u_air=200, v_air=0, so ground speed = hypot(200 + 5, 0 + 0) = 205.
+# Constants in synthetic fields. azimuth is a compass bearing (0=N, 90=E,
+# clockwise), so azimuth=0 (due north) gives u_air=TAS*sin(0)=0,
+# v_air=TAS*cos(0)=200; ground speed = hypot(0 + 5, 200 + 0).
 _WIND_U = 5.0
 _WIND_V = 0.0
-_EXPECTED_GS = 205.0
+_EXPECTED_GS = 200.06249023742558
 
 
 def _make_field(shape: tuple[int, ...], value: float) -> np.ndarray:
@@ -458,13 +496,14 @@ def test_monthly_in_annual_picks_correct_month_at_period_boundary(tmp_path):
         file_resolution=TemporalResolution.ANNUAL,
         data_resolution=TemporalResolution.MONTHLY,
     )
-    # Query on 2024-03-31. Expected u_air = 200 (TAS, azimuth=0); wind_u for
-    # March is 3.0; ground speed = hypot(203, 0) = 203.
+    # Query on 2024-03-31. Expected v_air = 200 (TAS, azimuth=0 -> due
+    # north), u_air = 0; wind_u for March is 3.0, wind_v is 0; ground speed
+    # = hypot(0 + 3, 200 + 0).
     gs = _run_probe(w, pd.Timestamp('2024-03-31T23:00'))
-    assert gs == pytest.approx(203.0, rel=1e-4)
-    # Sanity check: querying in April returns wind_u=4 → gs=204.
+    assert gs == pytest.approx(200.02249873451737, rel=1e-4)
+    # Sanity check: querying in April returns wind_u=4 → gs=hypot(4, 200).
     gs = _run_probe(w, pd.Timestamp('2024-04-15T00:00'))
-    assert gs == pytest.approx(204.0, rel=1e-4)
+    assert gs == pytest.approx(200.0399960007998, rel=1e-4)
 
 
 def test_daily_data_in_annual_file(tmp_path):
@@ -668,7 +707,11 @@ def test_explicit_azimuth_overrides_ground_track_azimuth(tmp_path):
         azimuth=90.0,
     )
     assert gs_auto == pytest.approx(_EXPECTED_GS, rel=1e-4)
-    assert gs_east == pytest.approx(float(np.hypot(_WIND_U, _PROBE_TAS)), rel=1e-4)
+    # azimuth=90 (due east) with a pure eastward wind (_WIND_U) is a direct
+    # tailwind, so ground speed is simply TAS + wind speed -- not
+    # hypot(wind, TAS), which would be the crosswind case (see _PROBE_POINT's
+    # azimuth=0/due-north above).
+    assert gs_east == pytest.approx(_PROBE_TAS + _WIND_U, rel=1e-4)
     assert gs_auto != gs_east
 
 

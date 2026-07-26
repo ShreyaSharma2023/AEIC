@@ -265,7 +265,10 @@ class Weather:
         else:
             heading_rad = np.deg2rad(azimuth)
 
-        u_air = true_airspeed * np.cos(heading_rad)
-        v_air = true_airspeed * np.sin(heading_rad)
+        # heading_rad is a compass bearing (0=N, 90=E, clockwise), matching
+        # pyproj Geod.inv's azimuth convention used to compute it -- so the
+        # eastward/northward components come from sin/cos, not cos/sin.
+        u_air = true_airspeed * np.sin(heading_rad)
+        v_air = true_airspeed * np.cos(heading_rad)
 
         return float(np.hypot(u_air + wind_u, v_air + wind_v))
