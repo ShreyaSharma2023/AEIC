@@ -200,13 +200,15 @@ def write_legacy_performance_toml(
         fp.write(descent_fp_section)
 
 
-def lto_from_edb(engine_file, engine_uid, thrust_fractions) -> LTOPerformance:
+def lto_from_edb(
+    engine_file, engine_uid, thrust_fractions, strict: bool = True
+) -> LTOPerformance:
     if engine_file is None or engine_uid is None:
         raise click.UsageError(
             'Both --engine-file and --engine-uid must be provided when '
             'using "edb" as the LTO source.'
         )
-    edb_data = EDBEntry.get_engine(engine_file, engine_uid)
+    edb_data = EDBEntry.get_engine(engine_file, engine_uid, strict=strict)
     return edb_data.make_lto_performance(thrust_fractions)
 
 
