@@ -182,3 +182,32 @@ def calculate_air_density(
     pressure = np.asarray(pressure)
     temperature = np.asarray(temperature)
     return pressure / (R_air * temperature)
+
+
+_GAMMA = 1.4
+_A0 = float(calculate_speed_of_sound(T0))
+"""Sea-level speed of sound [m/s], used by the CAS<->TAS conversions below."""
+
+
+def cas_to_tas_ms(cas_ms: float, altitude: float) -> float:
+    """Convert calibrated airspeed [m/s] to true airspeed [m/s] at the given
+    altitude [m] (compressible ISA formula, ICAO Doc 8643)."""
+    pressure = float(pressure_at_altitude_isa_bada4(altitude))
+    temperature = float(temperature_at_altitude_isa_bada4(altitude))
+    density = float(calculate_air_density(pressure, temperature))
+
+    qc_p0 = (1.0 + 0.2 * (cas_ms / _A0) ** 2) ** 3.5 - 1.0
+    f = (qc_p0 * p0 / pressure + 1.0) ** (0.4 / 1.4) - 1.0
+    return (_GAMMA * (2.0 / (_GAMMA - 1.0)) * (pressure / density) * f) ** 0.5
+
+
+def tas_to_cas_ms(tas_ms: float, altitude: float) -> float:
+    """Convert true airspeed [m/s] to calibrated airspeed [m/s] at the given
+    altitude [m] -- closed-form inverse of :func:`cas_to_tas_ms`."""
+    pressure = float(pressure_at_altitude_isa_bada4(altitude))
+    temperature = float(temperature_at_altitude_isa_bada4(altitude))
+    density = float(calculate_air_density(pressure, temperature))
+
+    f = tas_ms**2 / (_GAMMA * (2.0 / (_GAMMA - 1.0)) * (pressure / density))
+    qc_p0 = ((f + 1.0) ** (1.4 / 0.4) - 1.0) * pressure / p0
+    return _A0 * (5.0 * ((qc_p0 + 1.0) ** (1.0 / 3.5) - 1.0)) ** 0.5

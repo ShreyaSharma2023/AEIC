@@ -8,20 +8,38 @@ from typing import Protocol
 import numpy as np
 
 from AEIC.config import config
+from AEIC.constants import g0
 from AEIC.missions import Mission
 from AEIC.performance.models import BasePerformanceModel
 from AEIC.performance.types import AircraftState, SimpleFlightRules
 from AEIC.storage import FlightPhase
 from AEIC.units import (
     FEET_TO_METERS,
+    FPM_TO_MPS,
     METERS_TO_FL,
     MINUTES_TO_SECONDS,
     NAUTICAL_MILES_TO_METERS,
+)
+from AEIC.utils.standard_atmosphere import (
+    cas_to_tas_ms,
+    speed_of_sound_at_altitude,
+    tas_to_cas_ms,
 )
 from AEIC.weather import Weather
 
 from .. import GroundTrack, Trajectory
 from .base import Builder, Context, Options
+
+DEFAULT_STEP_CLIMB_ROCD_FPM = 300.0
+"""Fallback mid-cruise step-climb ROCD, used only when the performance model
+has no step-climb data (see BasePerformanceModel.step_climb_performance).
+Never derived from data -- a flat placeholder for models that can't do
+better."""
+
+STEP_CLIMB_PROPULSIVE_EFFICIENCY = 0.35
+"""Fallback propulsive efficiency for the excess-fuel-flow term, used
+alongside DEFAULT_STEP_CLIMB_ROCD_FPM only when the performance model has no
+step-climb data."""
 
 
 @dataclass
@@ -522,6 +540,23 @@ class AdjustableLegacyBuilder(Builder):
         (via `start_pt`, to continue from the existing in-progress point
         instead of resetting to the flight's origin)."""
 
+        # A step climb in the middle of cruise is physically a different
+        # manoeuvre from an initial climb-out: it's flown at ~100% Maximum
+        # Climb thrust holding the current cruise Mach/CAS, not accelerating
+        # out of the CLIMB table's low-altitude schedule (see
+        # _fly_step_climb_segment's docstring). When the performance model
+        # can supply that data, use it instead of the CLIMB-table path
+        # below. Models without step-climb data (e.g. LegacyPerformanceModel)
+        # fall straight through to the unchanged behavior beneath.
+        if (
+            flight_phase == FlightPhase.CRUISE
+            and start_pt is not None
+            and final_altitude >= start_pt.altitude
+            and hasattr(self.ac_performance, 'step_climb_performance')
+        ):
+            self._fly_step_climb_segment(traj, start_pt, final_altitude)
+            return
+
         traj.set_phase(flight_phase)
 
         # Start climb at overall flight start point and start descent at end of
@@ -655,6 +690,131 @@ class AdjustableLegacyBuilder(Builder):
             traj.fuel_flow[-1] = perf.fuel_flow
             traj.true_airspeed[-1] = perf.true_airspeed
             traj.rate_of_climb[-1] = perf.rate_of_climb
+
+            traj.append(pt)
+
+    def _fly_step_climb_segment(
+        self, traj: Trajectory, pt, final_altitude: float
+    ) -> None:
+        """Fly a mid-cruise step climb at ~100% Maximum Climb thrust, holding
+        whichever speed law currently applies -- constant Mach above the
+        CAS/Mach crossover altitude, constant CAS below it (see
+        AEIC.performance.types.SpeedData.crossover_altitude_m).
+
+        Real step climbs are flown at THR CLB / 100% Maximum Climb thrust:
+        climb-thrust derates like CLB1/CLB2 are removed by 15,000-30,000 ft,
+        so a step climb at cruise altitude always runs unde-rated -- a
+        materially different regime from the CLIMB table's initial-climb-out
+        data that the main _fly_level_change loop uses for FlightPhase.CLIMB,
+        so it needs its own ROCD/fuel-flow model rather than reusing that
+        table. ROCD and SFC come from the performance model's
+        step_climb_performance() (e.g. PianoPerformanceModel, reading
+        PIANO's own "RoC@MCL fix.Mach"/SFC cruise-table columns) when
+        available, falling back to DEFAULT_STEP_CLIMB_ROCD_FPM /
+        STEP_CLIMB_PROPULSIVE_EFFICIENCY otherwise (e.g. if the model has
+        the method but this particular cruise table predates that data)."""
+        traj.set_phase(FlightPhase.CRUISE)
+
+        sos_start = float(speed_of_sound_at_altitude(pt.altitude))
+        # NOTE: pt.true_airspeed is stale here -- it's only ever corrected
+        # retroactively on the *previous* array row (see fly_cruise's "Store
+        # performance data for point at beginning of this step" convention),
+        # never on the live pt object itself, so a freshly cloned start_pt
+        # can carry a leftover value from earlier in the flight.
+        # pt.ground_speed IS kept current (fly_cruise sets it directly each
+        # segment), and with weather=None it equals true airspeed, so it's
+        # the correct source for the current cruise Mach/TAS.
+        cruise_mach = pt.ground_speed / sos_start
+        cruise_tas = pt.ground_speed
+
+        sc_perf = self.ac_performance.step_climb_performance(
+            AircraftState(
+                altitude=pt.altitude,
+                true_airspeed=0.0,
+                rate_of_climb=0.0,
+                aircraft_mass=pt.aircraft_mass,
+            )
+        )
+        if sc_perf is not None:
+            step_rocd_ms = sc_perf.rocd_mcl_fixmach_ms
+            step_eta = cruise_tas / (sc_perf.sfc_si * self.fuel_LHV)
+        else:
+            step_rocd_ms = DEFAULT_STEP_CLIMB_ROCD_FPM * FPM_TO_MPS
+            step_eta = STEP_CLIMB_PROPULSIVE_EFFICIENCY
+
+        # Which speed law applies at the START of this step climb, held for
+        # the whole climb (matching how a pilot actually flies it: pick a
+        # schedule and hold it, not switch mid-step).
+        crossover_m = (
+            self.ac_performance.speeds.cruise.crossover_altitude_m
+            if self.ac_performance.speeds is not None
+            else None
+        )
+        above_crossover = crossover_m is None or pt.altitude >= crossover_m
+        cas_ms = None if above_crossover else tas_to_cas_ms(cruise_tas, pt.altitude)
+
+        altitudes = np.arange(pt.altitude, final_altitude, self.altitude_step)
+        if len(altitudes) == 0 or altitudes[-1] < final_altitude:
+            altitudes = np.append(altitudes, final_altitude)
+
+        for start_altitude, end_altitude in zip(altitudes[:-1], altitudes[1:]):
+            if above_crossover:
+                sos = float(speed_of_sound_at_altitude(start_altitude))
+                tas = cruise_mach * sos
+            else:
+                tas = cas_to_tas_ms(cas_ms, start_altitude)
+            horizontal_airspeed = np.sqrt(max(tas**2 - step_rocd_ms**2, 0.0))
+
+            perf_out = self.ac_performance.evaluate(
+                AircraftState(
+                    altitude=start_altitude,
+                    true_airspeed=tas,
+                    rate_of_climb=0.0,
+                    aircraft_mass=pt.aircraft_mass,
+                ),
+                SimpleFlightRules.CRUISE,
+            )
+            excess_fuel_flow = (pt.aircraft_mass * g0 * step_rocd_ms) / (
+                self.fuel_LHV * step_eta
+            )
+            climb_fuel_flow = perf_out.fuel_flow + excess_fuel_flow
+
+            seg_time = (end_altitude - start_altitude) / step_rocd_ms
+            seg_fuel = climb_fuel_flow * seg_time
+
+            if self.weather is None:
+                pt.ground_speed = horizontal_airspeed
+                pt.heading = pt.azimuth
+            else:
+                track_vector = self.weather.get_track_vector(
+                    time=self.mission.departure,
+                    gt_point=self.ground_track.step(pt.ground_distance, 0.0),
+                    altitude=start_altitude,
+                    horizontal_airspeed=horizontal_airspeed,
+                    track_azimuth=pt.azimuth,
+                )
+                pt.ground_speed, pt.heading = (
+                    track_vector.ground_speed,
+                    track_vector.heading,
+                )
+
+            pt.altitude = end_altitude
+            pt.flight_level = pt.altitude * METERS_TO_FL
+
+            dist = pt.ground_speed * seg_time
+            gpt = self.ground_track.step(pt.ground_distance, dist)
+            pt.longitude = gpt.location.longitude
+            pt.latitude = gpt.location.latitude
+            pt.azimuth = gpt.azimuth
+
+            pt.fuel_mass -= seg_fuel
+            pt.aircraft_mass -= seg_fuel
+            pt.ground_distance += dist
+            pt.flight_time += seg_time
+
+            traj.fuel_flow[-1] = climb_fuel_flow
+            traj.true_airspeed[-1] = tas
+            traj.rate_of_climb[-1] = step_rocd_ms
 
             traj.append(pt)
 

@@ -4,7 +4,16 @@ import numpy as np
 import pytest
 
 import AEIC.trajectories.builders as tb
+from AEIC.commands.make_piano_performance_model import write_piano_performance_toml
+from AEIC.config import config
+from AEIC.missions import Mission
+from AEIC.missions.mission import iso_to_timestamp
+from AEIC.parsers.piano_reader import LB_TO_KG, PianoData
+from AEIC.performance.edb import EDBEntry
+from AEIC.performance.models import PerformanceModel
+from AEIC.performance.models.base import LTOPerformanceInput
 from AEIC.performance.models.legacy import ROCDFilter
+from AEIC.performance.models.piano import PianoPerformanceModel
 from AEIC.performance.types import AircraftState, SimpleFlightRules
 from AEIC.trajectories import GroundTrack
 from AEIC.trajectories.builders.adjustable_legacy import AdjustableLegacyContext
@@ -316,3 +325,99 @@ def test_adjustable_legacy_ground_distance_iter(sample_missions, performance_mod
     assert float(traj.ground_distance[-1]) == pytest.approx(
         ground_track.total_distance, abs=1.0
     )
+
+
+@pytest.fixture
+def step_climb_piano_model(test_data_dir, tmp_path):
+    """A real, loadable piano-type PerformanceModel whose cruise table
+    carries the step-climb columns (drag/sfc/mcl_avail/rocd_mcl_fixmach),
+    built from the same synthetic PIANO fixtures test_piano_reader.py uses."""
+    base = test_data_dir / 'performance' / 'piano'
+    piano_data = PianoData.load(
+        base / 'cruise.txt',
+        base / 'climb.txt',
+        base / 'descent.txt',
+        climb_masses_lb=[m / LB_TO_KG for m in [51434.0, 68534.0, 81371.0]],
+    )
+
+    edb_data = EDBEntry.get_engine(
+        config.file_location('engines/sample_edb.xlsx'), '01P11CM121'
+    )
+    lto = edb_data.make_lto_performance((0.07, 0.30, 0.85, 1.0))
+    lto_dump = LTOPerformanceInput.from_internal(lto).model_dump()
+
+    cols = ['fl', 'mass', 'tas', 'rocd', 'fuel_flow']
+    cruise_cols = cols + ['drag', 'sfc', 'mcl_avail', 'rocd_mcl_fixmach']
+    output_file = tmp_path / 'step_climb_piano_model.toml'
+    write_piano_performance_toml(
+        str(output_file),
+        aircraft_name='B738',
+        aircraft_class='narrow',
+        isa_offset=0,
+        maximum_altitude_ft=piano_data.maximum_altitude_ft,
+        maximum_payload_kg=22422,
+        maximum_payload_source='test fixture value',
+        number_of_engines=2,
+        apu_name=None,
+        lto_dump=lto_dump,
+        speeds_dump=piano_data.speeds.model_dump(),
+        climb_flight_performance=dict(
+            cols=cols, data=piano_data.flight_performance.climb
+        ),
+        cruise_flight_performance=dict(
+            cols=cruise_cols, data=piano_data.flight_performance.cruise
+        ),
+        descent_flight_performance=dict(
+            cols=cols, data=piano_data.flight_performance.descent
+        ),
+    )
+
+    model = PerformanceModel.load(output_file)
+    assert isinstance(model, PianoPerformanceModel)
+    return model
+
+
+def test_adjustable_legacy_flies_piano_step_climb(step_climb_piano_model):
+    """A piano-type model with step-climb data, flown with an observed
+    cruise_profile, must take the _fly_step_climb_segment path -- not the
+    CLIMB-table path used for the initial climb-out -- and its ROCD during
+    the step climb must match step_climb_performance()'s
+    rocd_mcl_fixmach_ms, not a value drawn from the CLIMB table."""
+    mission = Mission(
+        origin='BOS',
+        destination='LAX',
+        departure=iso_to_timestamp('2024-09-01T12:00:00'),
+        arrival=iso_to_timestamp('2024-09-01T18:00:00'),
+        aircraft_type='738',
+        load_factor=1.0,
+        cruise_profile=[(0.0, 330.0), (0.6, 350.0)],
+    )
+    builder = tb.AdjustableLegacyBuilder(options=tb.Options(iterate_mass=False))
+    traj = builder.fly(step_climb_piano_model, mission)
+
+    assert np.max(traj.altitude) == pytest.approx(350.0 * 100.0 * FEET_TO_METERS)
+
+    # Points strictly between the two cruise breakpoints, climbing (not the
+    # initial climb-out, which ends by construction once cruise starts): the
+    # step-climb segment.
+    cruise_start = traj.n_climb
+    step_mask = (
+        (np.arange(len(traj)) >= cruise_start)
+        & (traj.rate_of_climb > 0)
+        & (traj.altitude > 330.0 * 100.0 * FEET_TO_METERS)
+    )
+    assert step_mask.any(), 'expected at least one mid-cruise step-climb point'
+
+    for i in np.flatnonzero(step_mask):
+        sc_perf = step_climb_piano_model.step_climb_performance(
+            AircraftState(
+                altitude=float(traj.altitude[i]),
+                true_airspeed=0.0,
+                rate_of_climb=0.0,
+                aircraft_mass=float(traj.aircraft_mass[i]),
+            )
+        )
+        assert sc_perf is not None
+        assert float(traj.rate_of_climb[i]) == pytest.approx(
+            sc_perf.rocd_mcl_fixmach_ms, rel=1e-6
+        )
