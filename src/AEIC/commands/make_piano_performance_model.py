@@ -84,7 +84,7 @@ def write_piano_performance_toml(
         phase_tbl = table()
         phase_data = speeds_dump[phase]
         for key in SPEED_KEY_ORDER:
-            if key in phase_data:
+            if key in phase_data and phase_data[key] is not None:
                 phase_tbl[key] = phase_data[key]
         speeds_super.append(phase, phase_tbl)
     doc['speeds'] = speeds_super
@@ -356,6 +356,12 @@ def make_piano_performance_model(
     )
 
     cols = ['fl', 'mass', 'tas', 'rocd', 'fuel_flow']
+    # Cruise carries 4 extra fields beyond the shared 5-column schema, used
+    # for step-climb modelling (see FlightPerformanceByPhase's docstring in
+    # AEIC.parsers.piano_reader): climb/descent already report real,
+    # directly-simulated fuel flow at each (FL, mass) point and don't need
+    # them.
+    cruise_cols = cols + ['drag', 'sfc', 'mcl_avail', 'rocd_mcl_fixmach']
     write_piano_performance_toml(
         output_file,
         aircraft_name=aircraft_name,
@@ -372,7 +378,7 @@ def make_piano_performance_model(
             cols=cols, data=piano_data.flight_performance.climb
         ),
         cruise_flight_performance=dict(
-            cols=cols, data=piano_data.flight_performance.cruise
+            cols=cruise_cols, data=piano_data.flight_performance.cruise
         ),
         descent_flight_performance=dict(
             cols=cols, data=piano_data.flight_performance.descent

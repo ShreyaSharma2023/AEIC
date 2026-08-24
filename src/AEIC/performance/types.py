@@ -284,6 +284,13 @@ class SpeedData(CIBaseModel):
     mach: float
     """Mach number."""
 
+    crossover_altitude_m: float | None = None
+    """Altitude [m] at and above which this phase is flown at constant Mach
+    rather than constant CAS (the point where holding cas_high would exceed
+    `mach`). None if not known/applicable for this performance model. Used
+    to decide, e.g., whether a mid-cruise step climb should hold Mach or CAS
+    constant depending on the altitude it starts from."""
+
 
 class Speeds(CIBaseModel):
     """Speeds for different flight phases."""

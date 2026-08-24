@@ -5,6 +5,8 @@ import pytest
 
 from AEIC.performance.models.legacy import PerformanceTableInput, ROCDFilter
 from AEIC.performance.models.piano import PianoPerformanceTable
+from AEIC.performance.types import AircraftState
+from AEIC.units import FL_TO_METERS
 
 # Shared scaffolding, deliberately parallel to tests/test_performance_table.py's
 # scaffolding for the legacy (BADA) model -- this exercises the same
@@ -193,3 +195,76 @@ def test_piano_performance_table_tas_fl_only_rejects():
             _mutate_cell(_climb_rows(), fl=330, mass=60000, col='TAS', new=999.0),
             ROCDFilter.POSITIVE,
         )
+
+
+_STEP_CLIMB_COLS = _COLS + ['DRAG', 'SFC', 'MCL_AVAIL', 'ROCD_MCL_FIXMACH']
+
+
+def _cruise_rows_with_step_climb(masses=(60000, 70000, 80000)):
+    """Same shape as _cruise_rows, plus the 4 step-climb columns."""
+    rows = []
+    for fl in (330, 350):
+        for mass in masses:
+            tas = 220 + (fl - 300) // 10
+            ff = round(0.5 + 0.001 * fl + 0.000001 * mass, 6)
+            drag = 10000.0 + 0.05 * mass
+            sfc = 1.7e-5
+            mcl_avail = drag * 2.0 + fl  # varies with fl too, for interpolation to bite
+            rocd_mcl_fixmach = 8.0 - 0.00002 * mass
+            rows.append(
+                [fl, ff, tas, 0.0, mass, drag, sfc, mcl_avail, rocd_mcl_fixmach]
+            )
+    return rows
+
+
+def test_piano_performance_table_step_climb_data_absent_by_default():
+    """A plain 5-column cruise table (no step-climb fields) reports
+    has_step_climb_data=False and interpolate_step_climb returns None."""
+    model = _build(_cruise_rows(), ROCDFilter.ZERO)
+    assert model.has_step_climb_data is False
+    state = AircraftState(
+        altitude=340 * FL_TO_METERS,
+        true_airspeed=0.0,
+        rate_of_climb=0.0,
+        aircraft_mass=65000.0,
+    )
+    assert model.interpolate_step_climb(state) is None
+
+
+def test_piano_performance_table_step_climb_data_interpolates():
+    """With the 4 extra columns present, interpolate_step_climb bilinearly
+    interpolates them the same way interpolate() does for tas/rocd/fuel_flow."""
+    rows = _cruise_rows_with_step_climb()
+    model = PianoPerformanceTable.from_input(
+        PerformanceTableInput(cols=_STEP_CLIMB_COLS, data=rows),
+        rocd_type=ROCDFilter.ZERO,
+    )
+    assert model.has_step_climb_data is True
+
+    # Exact grid point (fl=330, mass=60000) should recover the input exactly.
+    state = AircraftState(
+        altitude=330 * FL_TO_METERS,
+        true_airspeed=0.0,
+        rate_of_climb=0.0,
+        aircraft_mass=60000.0,
+    )
+    result = model.interpolate_step_climb(state)
+    assert result is not None
+    assert result.drag_n == pytest.approx(10000.0 + 0.05 * 60000)
+    assert result.sfc_si == pytest.approx(1.7e-5)
+    assert result.mcl_avail_n == pytest.approx((10000.0 + 0.05 * 60000) * 2.0 + 330)
+    assert result.rocd_mcl_fixmach_ms == pytest.approx(8.0 - 0.00002 * 60000)
+
+    # Midpoint mass (interpolated, not a grid point) should land between the
+    # two bracketing masses' drag values.
+    state_mid = AircraftState(
+        altitude=330 * FL_TO_METERS,
+        true_airspeed=0.0,
+        rate_of_climb=0.0,
+        aircraft_mass=65000.0,
+    )
+    result_mid = model.interpolate_step_climb(state_mid)
+    assert result_mid is not None
+    drag_60k = 10000.0 + 0.05 * 60000
+    drag_70k = 10000.0 + 0.05 * 70000
+    assert drag_60k < result_mid.drag_n < drag_70k

@@ -58,9 +58,15 @@ def source_table():
 
 def _flight_performance_df(piano_data: PianoData) -> pd.DataFrame:
     cols = ['fl', 'mass', 'tas', 'rocd', 'fuel_flow']
+    # Cruise rows carry 4 extra step-climb fields beyond the shared 5;
+    # slice them off here since this helper only compares the shared columns
+    # against the source table.
     frames = [
         pd.DataFrame(piano_data.flight_performance.climb, columns=cols),
-        pd.DataFrame(piano_data.flight_performance.cruise, columns=cols),
+        pd.DataFrame(
+            [row[: len(cols)] for row in piano_data.flight_performance.cruise],
+            columns=cols,
+        ),
         pd.DataFrame(piano_data.flight_performance.descent, columns=cols),
     ]
     return pd.concat(frames, ignore_index=True)
@@ -110,6 +116,47 @@ def test_piano_data_load_recovers_source_table(piano_files, source_table):
             (merged.fuel_flow_recon - merged.fuel_flow_orig) / merged.fuel_flow_orig
         ).abs()
         assert rel_err.max() < tol, f'{label} fuel_flow mismatch: {rel_err.max()}'
+
+
+def test_piano_data_cruise_carries_step_climb_fields(piano_files):
+    """The cruise table's extra step-climb columns (drag/sfc/mcl_avail/
+    rocd_mcl_fixmach) round-trip through PianoData.load, and the cruise
+    crossover altitude is computed and attached to speeds.cruise."""
+    climb_masses_lb = [m / LB_TO_KG for m in SOURCE_MASSES_KG]
+
+    piano_data = PianoData.load(
+        piano_files['cruise'],
+        piano_files['climb'],
+        piano_files['descent'],
+        climb_masses_lb=climb_masses_lb,
+    )
+
+    # Every cruise row has 9 fields: the shared 5 plus 4 step-climb fields.
+    assert all(len(row) == 9 for row in piano_data.flight_performance.cruise)
+
+    # Spot-check one row's extra fields are physically sane (not zero/NaN,
+    # not just carried over verbatim from PIANO units without conversion).
+    fl, mass, tas, rocd, fuel_flow, drag_n, sfc_si, mcl_avail_n, rocd_mcl_ms = (
+        piano_data.flight_performance.cruise[0]
+    )
+    assert drag_n > 0
+    # SI SFC is a tiny number; catches a missed unit conversion.
+    assert 0 < sfc_si < 1e-3
+    assert mcl_avail_n > drag_n  # available climb thrust must exceed cruise drag
+    assert rocd_mcl_ms > 0
+
+    # Climb/descent rows are untouched -- still the shared 5 fields only.
+    assert all(len(row) == 5 for row in piano_data.flight_performance.climb)
+    assert all(len(row) == 5 for row in piano_data.flight_performance.descent)
+
+    xover_m = piano_data.speeds.cruise.crossover_altitude_m
+    assert xover_m is not None
+    assert 0 < xover_m < piano_data.maximum_altitude_ft * 0.3048
+
+    # Climb/cruise/descent SpeedData don't get a crossover value (only ever
+    # computed for cruise -- see _select_cruise_rows).
+    assert piano_data.speeds.climb.crossover_altitude_m is None
+    assert piano_data.speeds.descent.crossover_altitude_m is None
 
 
 def test_piano_command_produces_loadable_model(piano_files, tmp_path):
@@ -169,12 +216,16 @@ def test_piano_command_produces_loadable_model(piano_files, tmp_path):
 def _cruise_row(mass_lb: float, alt_ft: float, mach: float) -> str:
     # Distinct, easily-identifiable TAS/fuel_flow per Mach -- not physically
     # derived, just unique markers so the test can tell which row was picked.
+    # Columns after "|": TAS CAS Drag MCR% L/D FuelFlow SFC SAR MCLavail
+    # RoC@MCL(fixMach) RoC@MCL(fixCAS) -- matching a real PIANO cruise table,
+    # since PianoData._parse_cruise requires at least 10 tokens there.
     tas_kts = mach * 700.0
     ff_lbhr = mach * 10000.0
     return (
         f'  {mass_lb:9.1f}  {alt_ft:8.1f}  {mach:.3f}    |    '
-        f'{tas_kts:6.1f}  {tas_kts:6.1f}  {0.0:8.1f}  {0.0:8.1f}  '
-        f'{0.0:6.2f}  {ff_lbhr:8.1f}'
+        f'{tas_kts:6.1f}  {tas_kts:6.1f}  {20000.0:8.1f}  {50.0:8.1f}  '
+        f'{20.0:6.2f}  {ff_lbhr:8.1f}  {0.6:.4f}  {0.02:.4f}  '
+        f'{15000.0:8.1f}  {1500.0:8.1f}  {1400.0:8.1f}'
     )
 
 
@@ -261,9 +312,10 @@ def test_piano_data_selects_cas_equivalent_mach_below_crossover(tmp_path):
         cas_high_kts=300.0,
     )
 
+    cols = ['fl', 'mass', 'tas', 'rocd', 'fuel_flow']
     cruise = pd.DataFrame(
-        piano_data.flight_performance.cruise,
-        columns=['fl', 'mass', 'tas', 'rocd', 'fuel_flow'],
+        [row[: len(cols)] for row in piano_data.flight_performance.cruise],
+        columns=cols,
     )
 
     expected_mach_by_fl = {100.0: 0.55, 200.0: 0.65, 350.0: 0.80}

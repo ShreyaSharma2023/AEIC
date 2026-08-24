@@ -157,12 +157,25 @@ def _write_descent_file(
 
 
 def _write_cruise_file(path: Path, df: pd.DataFrame, design_mach: float) -> None:
+    # Columns after "|": TAS CAS Drag MCR% L/D FuelFlow SFC SAR MCLavail
+    # RoC@MCL(fixMach) RoC@MCL(fixCAS) -- matching a real PIANO cruise table.
+    # The source (sample_performance_model.toml, a BADA-derived legacy
+    # fixture) has no real drag/SFC/available-climb-thrust data to draw the
+    # last 5 from, so they're simple, structurally-plausible placeholders
+    # (level-cruise SFC assumed 0.6 lb/hr/lbf, thrust=drag in cruise, MCL
+    # thrust assumed 2x cruise drag) -- fine for round-trip parsing/schema
+    # tests, not meant to be physically validated (that happened separately,
+    # against real PIANO exports, off-repo).
+    assumed_sfc_lbhrlbf = 0.6
     lines = [
         '  Cruise table for B738 (synthetic, from sample_performance_model.toml)',
         '',
-        '  Mass   Altitude  Mach   |   TAS    CAS    Drag    MCR.%   L/D  FuelFlow',
-        '  ----   --------  ----   |   ---    ---    ----    -----   --- --------',
-        '   lb.     feet    ....   |   kts    kts     lbf.  percent  ...   lb/hr',
+        '  Mass   Altitude  Mach   |   TAS    CAS    Drag    MCR.%   L/D  FuelFlow'
+        '     SFC      SAR  MCLavail  RoC@MCL  RoC@MCL',
+        '  ----   --------  ----   |   ---    ---    ----    -----   --- --------'
+        '     ---      ---       ---  fixMach  fixCAS',
+        '   lb.     feet    ....   |   kts    kts     lbf.  percent  ...   lb/hr'
+        ' lb/h/lbf    nm/lb      lbf.  feet/min feet/min',
         '',
     ]
     cruise = df[df['rocd'].abs() <= 1e-6].sort_values(['mass', 'fl'])
@@ -171,10 +184,16 @@ def _write_cruise_file(path: Path, df: pd.DataFrame, design_mach: float) -> None
         alt_ft = row.fl * 100.0
         tas_kts = row.tas / KNOTS_TO_MPS
         ff_lbhr = (row.fuel_flow / LB_TO_KG) * 3600.0
+        drag_lbf = ff_lbhr / assumed_sfc_lbhrlbf
+        mcl_avail_lbf = drag_lbf * 2.0
+        rocd_mcl_fixmach_fpm = 2000.0
+        rocd_mcl_fixcas_fpm = rocd_mcl_fixmach_fpm * 0.9
         data_row = (
             f'  {mass_lb:9.1f}  {alt_ft:8.1f}  {design_mach:.3f}    |    '
-            f'{tas_kts:6.1f}  {tas_kts:6.1f}  {0.0:8.1f}  {0.0:8.1f}  '
-            f'{0.0:6.2f}  {ff_lbhr:8.1f}'
+            f'{tas_kts:6.1f}  {tas_kts:6.1f}  {drag_lbf:8.1f}  {0.0:8.1f}  '
+            f'{0.0:6.2f}  {ff_lbhr:8.1f}  {assumed_sfc_lbhrlbf:.4f}  {0.02:.4f}  '
+            f'{mcl_avail_lbf:8.1f}  {rocd_mcl_fixmach_fpm:8.1f}  '
+            f'{rocd_mcl_fixcas_fpm:8.1f}'
         )
         lines.append(data_row)
     path.write_text('\n'.join(lines) + '\n')

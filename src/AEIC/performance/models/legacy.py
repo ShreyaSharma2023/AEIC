@@ -73,9 +73,18 @@ class ROCDFilter(Enum):
 
 
 class Interpolator:
-    """Grid-based interpolator for performance model data."""
+    """Grid-based interpolator for performance model data.
 
-    def __init__(self, df: pd.DataFrame):
+    ``extra_cols``, if given, are additional numeric columns (beyond the
+    always-present tas/rocd/fuel_flow) to also build bilinear-interpolable
+    grids for, queryable via :meth:`interpolate_extra`. Used by
+    :class:`AEIC.performance.models.piano.PianoPerformanceTable`'s cruise
+    table to carry drag/SFC/available-climb-thrust/step-climb-ROCD data that
+    BADA-derived (legacy) tables don't have; unused (``None``) for every
+    other caller, so this is fully additive and doesn't change ``__call__``'s
+    existing behavior."""
+
+    def __init__(self, df: pd.DataFrame, extra_cols: list[str] | None = None):
         # Requirements:
         #  - Regular FL, regular mass ⇒ rectlinear grid;
         #  - Dense: unique (FL, mass); #rows = #FL × #mass
@@ -94,6 +103,8 @@ class Interpolator:
         self.min_mass = min(masses)
         self.max_mass = max(masses)
 
+        self._extra_cols = extra_cols or []
+
         # If there is only one mass value, we need to do linear interpolation
         # in flight level. Otherwise we will be doing bilinear interpolation in
         # flight level and mass.
@@ -106,6 +117,7 @@ class Interpolator:
             self.tas = np.zeros(shape)
             self.rocd = np.zeros(shape)
             self.fuel_flow = np.zeros(shape)
+            self.extra = {col: np.zeros(shape) for col in self._extra_cols}
 
             # Construct output values.
             for row in df.itertuples():
@@ -114,6 +126,8 @@ class Interpolator:
                 self.tas[i, j] = row.tas  # type: ignore
                 self.rocd[i, j] = row.rocd  # type: ignore
                 self.fuel_flow[i, j] = row.fuel_flow  # type: ignore
+                for col in self._extra_cols:
+                    self.extra[col][i, j] = getattr(row, col)
         else:
             self.xs = (np.array(fls),)
 
@@ -121,6 +135,7 @@ class Interpolator:
             self.tas = df.tas.values
             self.rocd = df.rocd.values
             self.fuel_flow = df.fuel_flow.values
+            self.extra = {col: df[col].values for col in self._extra_cols}
 
     def __call__(self, fl: float, mass: float) -> Performance:
         """Perform bilinear interpolation to get performance values at given
@@ -139,6 +154,26 @@ class Interpolator:
             rate_of_climb=float(interpn(self.xs, self.rocd, x, method='linear')[0]),
             fuel_flow=float(interpn(self.xs, self.fuel_flow, x, method='linear')[0]),
         )
+
+    def interpolate_extra(self, fl: float, mass: float) -> dict[str, float]:
+        """Bilinear-interpolate the ``extra_cols`` passed at construction, at
+        the given flight level and aircraft mass. Empty dict if none were
+        given."""
+        if not self._extra_cols:
+            return {}
+
+        if self.n_masses > 1:
+            x = (
+                np.clip(fl, self.min_fl, self.max_fl),
+                np.clip(mass, self.min_mass, self.max_mass),
+            )
+        else:
+            x = np.array([np.clip(fl, self.min_fl, self.max_fl)])
+
+        return {
+            col: float(interpn(self.xs, grid, x, method='linear')[0])
+            for col, grid in self.extra.items()
+        }
 
 
 @dataclass

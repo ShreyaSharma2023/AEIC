@@ -191,6 +191,11 @@ def main() -> None:
             )
 
             cols = ['fl', 'mass', 'tas', 'rocd', 'fuel_flow']
+            # Cruise carries 4 extra fields beyond the shared 5-column schema,
+            # used for step-climb modelling (see FlightPerformanceByPhase's
+            # docstring in AEIC.parsers.piano_reader) -- keep in sync with
+            # AEIC.commands.make_piano_performance_model's own cruise_cols.
+            cruise_cols = cols + ['drag', 'sfc', 'mcl_avail', 'rocd_mcl_fixmach']
             write_piano_performance_toml(
                 str(out_toml),
                 aircraft_name=str(row['piano_plane_file']),
@@ -207,7 +212,7 @@ def main() -> None:
                     cols=cols, data=piano_data.flight_performance.climb
                 ),
                 cruise_flight_performance=dict(
-                    cols=cols, data=piano_data.flight_performance.cruise
+                    cols=cruise_cols, data=piano_data.flight_performance.cruise
                 ),
                 descent_flight_performance=dict(
                     cols=cols, data=piano_data.flight_performance.descent

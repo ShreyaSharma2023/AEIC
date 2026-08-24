@@ -25,12 +25,16 @@ _COL_COMMENTS = {
     'tas': 'm/s',
     'rocd': 'm/s',
     'mass': 'kg',
+    'drag': 'N - level-cruise drag at this (fl, mass, mach)',
+    'sfc': 'kg/(N*s) - thrust-specific fuel consumption at this (fl, mass, mach)',
+    'mcl_avail': 'N - available Max Climb thrust (all engines) at this (fl, mass)',
+    'rocd_mcl_fixmach': 'm/s - ROCD at 100% Max Climb thrust, holding Mach constant',
 }
 
 LTO_MODE_ORDER = ('idle', 'approach', 'climb', 'takeoff')
 LTO_MODE_KEY_ORDER = ('thrust_frac', 'fuel_kgs', 'EI_NOx', 'EI_HC', 'EI_CO')
 SPEED_PHASE_ORDER = ('climb', 'cruise', 'descent')
-SPEED_KEY_ORDER = ('cas_low', 'cas_high', 'mach')
+SPEED_KEY_ORDER = ('cas_low', 'cas_high', 'mach', 'crossover_altitude_m')
 
 
 def add_top_banner(doc, title: str, description: str | None = None) -> None:

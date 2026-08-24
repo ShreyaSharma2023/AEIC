@@ -168,6 +168,14 @@ def _build_tas_fn(
 # ---------------------------------------------------------------------------
 # Parse PIANO cruise table
 # ---------------------------------------------------------------------------
+LBF_TO_N = 4.4482216153
+"""Unit conversion factor for pounds-force to Newtons."""
+
+SFC_LBHRLBF_TO_SI = LB_TO_KG / 3600.0 / LBF_TO_N
+"""Unit conversion factor for thrust-specific fuel consumption, from PIANO's
+lb fuel/hr per lbf thrust to SI kg/(N*s)."""
+
+
 def _parse_cruise(path: str) -> pd.DataFrame:
     """Parse a formatted PIANO cruise table.
 
@@ -181,7 +189,16 @@ def _parse_cruise(path: str) -> pd.DataFrame:
     (see ``_select_cruise_rows``).
 
     Returns a DataFrame with columns: mass_kg, alt_ft, fl, mach, tas_ms,
-    fuel_flow_kgs.
+    fuel_flow_kgs, drag_n, sfc_si, mcl_avail_n, rocd_mcl_fixmach_ms.
+
+    The last four are used for step-climb modelling (a mid-cruise climb to a
+    higher altitude, holding the current cruise Mach constant, executed at
+    100% Maximum Climb thrust -- confirmed real operational behavior, since
+    climb-thrust derates like CLB1/CLB2 are removed well below any cruise
+    altitude): drag_n and sfc_si describe the level-cruise baseline being
+    climbed away from; mcl_avail_n and rocd_mcl_fixmach_ms are PIANO's own
+    computation of the thrust available and the resulting climb rate if MCL
+    thrust were applied right now, holding Mach constant.
     """
     rows = []
     with open(path, errors='ignore') as f:
@@ -192,16 +209,25 @@ def _parse_cruise(path: str) -> pd.DataFrame:
             lp = left.split()
             rp = right.split()
             # Expect exactly 3 tokens on the left: mass, alt, mach.
-            if len(lp) != 3 or len(rp) < 6:
+            if len(lp) != 3 or len(rp) < 10:
                 continue
             try:
                 mass_lb = float(lp[0])
                 alt_ft = float(lp[1])
                 mach = float(lp[2])
-                # rp columns: TAS, CAS, Drag, MCR%, L/D, FuelFlow, ...
+                # rp columns: TAS, CAS, Drag, MCR%, L/D, FuelFlow, SFC, SAR,
+                # MCLavail, RoC@MCL(fixMach), RoC@MCL(fixCAS), ...
                 tas_kts = float(rp[0])
+                drag_lbf = float(rp[2])
                 ff_lbhr = float(rp[5])
+                sfc_lbhrlbf = float(rp[6])
+                mcl_avail_lbf = float(rp[8])
+                rocd_mcl_fixmach_fpm = float(rp[9])
             except ValueError:
+                # Rows at speeds too slow/fast for this (mass, altitude) to
+                # sustain print "..." for every derived performance column
+                # (only TAS/CAS are always populated) -- skip them, same as
+                # the pre-existing fuel_flow-based skip did.
                 continue
             rows.append(
                 {
@@ -211,6 +237,10 @@ def _parse_cruise(path: str) -> pd.DataFrame:
                     'mach': mach,
                     'tas_ms': tas_kts * KNOTS_TO_MPS,
                     'fuel_flow_kgs': ff_lbhr * LBHR_TO_KGS,
+                    'drag_n': drag_lbf * LBF_TO_N,
+                    'sfc_si': sfc_lbhrlbf * SFC_LBHRLBF_TO_SI,
+                    'mcl_avail_n': mcl_avail_lbf * LBF_TO_N,
+                    'rocd_mcl_fixmach_ms': rocd_mcl_fixmach_fpm * FPM_TO_MPS,
                 }
             )
     if not rows:
@@ -226,7 +256,7 @@ def _select_cruise_rows(
     design_mach: float,
     cas_low_kts: float,
     cas_high_kts: float,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, float]:
     """Reduce a (possibly multi-Mach) cruise DataFrame to one row per (mass,
     altitude), selecting the row whose Mach is nearest the physically
     appropriate cruise Mach at that altitude: the design Mach above the
@@ -239,6 +269,12 @@ def _select_cruise_rows(
     (multiple rows per altitude), this selects the row that corresponds to
     how the aircraft is actually flown at each altitude. For a single-Mach
     cruise file, this is a no-op (only one row exists per altitude).
+
+    Returns (selected_df, crossover_altitude_ft) -- the crossover altitude
+    for design_mach/cas_high_kts, i.e. the altitude at and above which this
+    aircraft cruises at constant Mach rather than constant CAS. Used
+    downstream to decide whether a mid-cruise step climb (which holds
+    whichever speed law currently applies) should hold Mach or CAS constant.
     """
     xover_ft = _crossover_altitude_ft(design_mach, cas_high_kts)
 
@@ -263,7 +299,7 @@ def _select_cruise_rows(
         ).sort_values(['distance', 'mach'])
         idx = ordered.index[0]
         selected_rows.append(group.loc[idx])
-    return pd.DataFrame(selected_rows).reset_index(drop=True)
+    return pd.DataFrame(selected_rows).reset_index(drop=True), xover_ft
 
 
 # ---------------------------------------------------------------------------
@@ -468,10 +504,20 @@ def _derive_fuel_flow_kgs(df: pd.DataFrame) -> np.ndarray:
 class FlightPerformanceByPhase:
     """Flight-performance rows, one dense (FL x mass) grid per phase.
 
-    Each list holds rows of ``[fl, mass_kg, tas_ms, rocd_ms, fuel_flow_kgs]``,
-    matching the ``climb_flight_performance``/``cruise_flight_performance``/
-    ``descent_flight_performance`` sections of the legacy performance model
-    TOML format."""
+    ``climb`` and ``descent`` hold rows of
+    ``[fl, mass_kg, tas_ms, rocd_ms, fuel_flow_kgs]``, matching the
+    ``climb_flight_performance``/``descent_flight_performance`` sections of
+    the legacy performance model TOML format -- these phases already report
+    real, directly-simulated fuel flow at each (FL, mass) grid point, so no
+    additional fields are needed.
+
+    ``cruise`` holds rows of ``[fl, mass_kg, tas_ms, rocd_ms, fuel_flow_kgs,
+    drag_n, sfc_si, mcl_avail_n, rocd_mcl_fixmach_ms]`` -- the same first 5
+    columns, plus 4 extra fields used for step-climb modelling (a mid-cruise
+    climb to a higher altitude, holding the current speed law -- Mach above
+    the CAS/Mach crossover altitude, CAS below it -- executed at 100% Max
+    Climb thrust, which is real operational behavior, not idle/reduced
+    thrust). See ``_parse_cruise``'s docstring for what each field means."""
 
     climb: list[list[float]]
     cruise: list[list[float]]
@@ -580,6 +626,13 @@ def _build_flight_performance(
                 crow['tas_ms'],
                 0.0,
                 crow['fuel_flow_kgs'],
+                # Step-climb fields (see _parse_cruise docstring). Fall back
+                # to NaN for any cruise_df that predates these columns (e.g.
+                # a caller-supplied DataFrame in a test) rather than raising.
+                crow.get('drag_n', float('nan')),
+                crow.get('sfc_si', float('nan')),
+                crow.get('mcl_avail_n', float('nan')),
+                crow.get('rocd_mcl_fixmach_ms', float('nan')),
             ]
         )
 
@@ -786,7 +839,7 @@ class PianoData:
         # (mass, altitude) -- the row matching how the aircraft is actually
         # flown at each altitude -- before it's used for either the climb/
         # descent TAS lookup or the cruise flight_performance rows.
-        selected_cruise_df = _select_cruise_rows(
+        selected_cruise_df, cruise_crossover_altitude_ft = _select_cruise_rows(
             cruise_df, resolved_design_mach, resolved_cas_low, resolved_cas_high
         )
 
@@ -840,6 +893,7 @@ class PianoData:
                 cas_low=resolved_cas_low * KNOTS_TO_MPS,
                 cas_high=resolved_cas_high * KNOTS_TO_MPS,
                 mach=resolved_design_mach,
+                crossover_altitude_m=cruise_crossover_altitude_ft * FEET_TO_METERS,
             ),
             descent=SpeedData(
                 cas_low=resolved_cas_low * KNOTS_TO_MPS,

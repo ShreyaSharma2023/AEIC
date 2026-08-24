@@ -37,6 +37,33 @@ from AEIC.units import METERS_TO_FL
 
 from .base import BasePerformanceModel
 
+STEP_CLIMB_EXTRA_COLS = ('drag', 'sfc', 'mcl_avail', 'rocd_mcl_fixmach')
+"""Extra cruise-table columns used for step-climb modelling (see
+FlightPerformanceByPhase's docstring in AEIC.parsers.piano_reader). Present
+only on the cruise table, and only for tables built from real PIANO data new
+enough to carry them -- absent on older-format cruise tables."""
+
+
+@dataclass
+class StepClimbPerformance:
+    """Cruise-table data needed to model a mid-cruise step climb at 100% Max
+    Climb thrust: drag/SFC describe the level-cruise baseline being climbed
+    away from, mcl_avail/rocd_mcl_fixmach describe the climb itself."""
+
+    drag_n: float
+    """Total aircraft drag [N] in level cruise at this (altitude, mass)."""
+
+    sfc_si: float
+    """Thrust-specific fuel consumption [kg/(N*s)] at this (altitude, mass)."""
+
+    mcl_avail_n: float
+    """Available Maximum Climb thrust, all engines [N], at this altitude."""
+
+    rocd_mcl_fixmach_ms: float
+    """PIANO's own computed ROCD [m/s] at 100% Max Climb thrust, holding
+    Mach constant -- the rate a same-Mach mid-cruise step climb actually
+    achieves."""
+
 
 @dataclass
 class PianoPerformanceTable:
@@ -155,6 +182,24 @@ class PianoPerformanceTable:
     def __len__(self) -> int:
         return len(self.df)
 
+    @property
+    def has_step_climb_data(self) -> bool:
+        """True if this table's cruise data carries the extra step-climb
+        columns (drag/sfc/mcl_avail/rocd_mcl_fixmach) -- only ever true for
+        the cruise table, and only for TOMLs generated after that data
+        started being kept (see FlightPerformanceByPhase's docstring in
+        AEIC.parsers.piano_reader)."""
+        return all(col in self.df.columns for col in STEP_CLIMB_EXTRA_COLS)
+
+    def _get_interpolator(self) -> Interpolator:
+        # Lazily create interpolator for flight phase segment.
+        if self._interpolator is None:
+            extra_cols = (
+                list(STEP_CLIMB_EXTRA_COLS) if self.has_step_climb_data else None
+            )
+            self._interpolator = Interpolator(self.df, extra_cols=extra_cols)
+        return self._interpolator
+
     def interpolate(self, state: AircraftState) -> Performance:
         """Perform bilinear interpolation in flight level and aircraft mass."""
 
@@ -165,11 +210,34 @@ class PianoPerformanceTable:
         elif mass == 'max':
             mass = max(self.mass)
 
-        # Lazily create interpolator for flight phase segment.
-        if self._interpolator is None:
-            self._interpolator = Interpolator(self.df)
+        self._interpolator = self._get_interpolator()
 
         return self._interpolator(fl, mass)
+
+    def interpolate_step_climb(
+        self, state: AircraftState
+    ) -> StepClimbPerformance | None:
+        """Bilinear-interpolate the step-climb fields (drag/sfc/mcl_avail/
+        rocd_mcl_fixmach) at the given flight level and aircraft mass. None
+        if this table doesn't carry them (see ``has_step_climb_data``)."""
+        if not self.has_step_climb_data:
+            return None
+
+        fl = state.altitude * METERS_TO_FL
+        mass = state.aircraft_mass
+        if mass == 'min':
+            mass = min(self.mass)
+        elif mass == 'max':
+            mass = max(self.mass)
+
+        self._interpolator = self._get_interpolator()
+        extra = self._interpolator.interpolate_extra(fl, mass)
+        return StepClimbPerformance(
+            drag_n=extra['drag'],
+            sfc_si=extra['sfc'],
+            mcl_avail_n=extra['mcl_avail'],
+            rocd_mcl_fixmach_ms=extra['rocd_mcl_fixmach'],
+        )
 
 
 class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
@@ -249,3 +317,17 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
                 return self._cruise_performance_table.interpolate(state)
             case SimpleFlightRules.DESCEND:
                 return self._descent_performance_table.interpolate(state)
+
+    def step_climb_performance(
+        self, state: AircraftState
+    ) -> StepClimbPerformance | None:
+        """Drag/SFC/available-climb-thrust/step-climb-ROCD at the given
+        altitude and mass, for modelling a mid-cruise step climb at 100% Max
+        Climb thrust. None if this model's cruise table predates these
+        fields (see PianoPerformanceTable.has_step_climb_data). Only
+        ``state.altitude`` and ``state.aircraft_mass`` are used; Mach is not
+        a parameter here because the cruise table already carries whichever
+        Mach the aircraft actually flies at each altitude (design Mach above
+        the CAS/Mach crossover, CAS-equivalent Mach below it -- see
+        ``speeds.cruise.crossover_altitude_m``)."""
+        return self._cruise_performance_table.interpolate_step_climb(state)
