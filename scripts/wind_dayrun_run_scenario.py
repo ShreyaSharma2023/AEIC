@@ -90,7 +90,6 @@ def _worker_init(scenario: str):
     global _builder, _selector
 
     from AEIC.config import Config
-    from AEIC.performance.model_selector import SimplePerformanceModelSelector
 
     if scenario == 'off':
         Config.load()
@@ -148,7 +147,21 @@ def _worker_init(scenario: str):
     else:
         raise ValueError(f'unknown scenario {scenario!r}')
 
-    _selector = SimplePerformanceModelSelector(PERFORMANCE_MODEL_DIR)
+    # Real performance_model_key entries in PERFORMANCE_MODEL_DIR are all
+    # piano-type as of an external change made partway through this session
+    # (originally legacy-type when this day-run was first built) -- no
+    # builder in this branch flies piano models yet (calc_starting_mass
+    # calls .performance_table(), which piano models don't expose). Per the
+    # established workaround used throughout this session's single-flight
+    # tests, substitute the fixed sample_performance_model.toml (legacy-
+    # type) for every flight rather than the real per-flight model.
+    from AEIC.config import config
+    from AEIC.performance.models import PerformanceModel
+
+    _sample_pm = PerformanceModel.load(
+        config.file_location('performance/sample_performance_model.toml')
+    )
+    _selector = lambda mission: _sample_pm  # noqa: E731
 
 
 def _fly_one(row: dict) -> dict:
@@ -177,10 +190,21 @@ def _fly_one(row: dict) -> dict:
     try:
         pm = _selector(mission)
         traj = _builder.fly(pm, mission)
+        # traj.total_fuel_mass is a STATIC pre-flight estimate (from
+        # calc_starting_mass, before the wind-affected simulation runs) --
+        # it is only corrected to match the actual simulated burn when
+        # iterate_mass=True, which this day-run does not use. The real,
+        # wind-dependent simulated fuel burn is starting_mass - final
+        # aircraft_mass; recorded separately here since it is NOT the same
+        # number and, unlike total_fuel_mass, does vary with wind.
+        actual_fuel_burned_kg = float(traj.aircraft_mass[0]) - float(
+            traj.aircraft_mass[-1]
+        )
         return {
             'flight_id': row['flight_id'],
             'success': True,
             'total_fuel_mass_kg': float(traj.total_fuel_mass),
+            'actual_fuel_burned_kg': actual_fuel_burned_kg,
             'duration_s': float(traj.flight_time[-1]),
             'final_ground_distance_km': float(traj.ground_distance[-1]) / 1000,
             'error': None,
@@ -190,6 +214,7 @@ def _fly_one(row: dict) -> dict:
             'flight_id': row['flight_id'],
             'success': False,
             'total_fuel_mass_kg': None,
+            'actual_fuel_burned_kg': None,
             'duration_s': None,
             'final_ground_distance_km': None,
             'error': f'{type(exc).__name__}: {exc}\n{traceback.format_exc()}',
