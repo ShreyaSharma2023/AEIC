@@ -151,6 +151,76 @@ def test_append_to_trajectory():
         assert all(np.diff(ext_traj.aircraft_mass[phase_slice]) < 0)
 
 
+def test_set_phase_reentry_does_not_reset_point_count():
+    """Re-entering the phase that's already current (e.g. a mid-cruise step
+    climb calling set_phase(CRUISE) again) must not reset that phase's point
+    count -- a regression here silently drops the earlier segment(s) of the
+    phase from n_cruise, which then skews _trajectory_slice's emissions
+    window whenever climb_descent_mode=LTO."""
+
+    def _fill_point(p, i):
+        p.fuel_flow = 1.4
+        p.aircraft_mass = 60000.0
+        p.fuel_mass = 20000.0
+        p.ground_distance = float(i * 1000)
+        p.altitude = float(i)
+        p.flight_level = 0.0
+        p.rate_of_climb = 0.0
+        p.flight_time = float(i * 60)
+        p.latitude = 41.0
+        p.longitude = -60.0
+        p.azimuth = 135.0
+        p.heading = 135.0
+        p.true_airspeed = 240.0
+        p.ground_speed = 240.0
+
+    traj = Trajectory()
+
+    def add_points(phase, n):
+        traj.set_phase(phase)
+        for i in range(n):
+            p = traj.make_point()
+            _fill_point(p, i)
+            traj.append(p)
+
+    add_points(FlightPhase.CLIMB, 5)
+    # Cruise flown as three segments with two re-entries into CRUISE in
+    # between (mirroring _fly_cruise_segment / _fly_step_climb_segment /
+    # _fly_level_change's start_pt=... path for a mid-cruise step climb).
+    add_points(FlightPhase.CRUISE, 3)
+    add_points(FlightPhase.CRUISE, 4)
+    add_points(FlightPhase.CRUISE, 2)
+    add_points(FlightPhase.DESCENT, 6)
+    traj.fix()
+
+    assert len(traj) == 20
+    assert traj.n_climb == 5
+    assert traj.n_cruise == 3 + 4 + 2
+    assert traj.n_descent == 6
+
+    # Setting a phase to itself with zero new points appended is also a
+    # true no-op -- not just "doesn't reset", but doesn't require points to
+    # follow immediately either.
+    traj2 = Trajectory()
+    traj2.set_phase(FlightPhase.CLIMB)
+    p = traj2.make_point()
+    _fill_point(p, 0)
+    traj2.append(p)
+    traj2.set_phase(FlightPhase.CLIMB)
+    traj2.set_phase(FlightPhase.CLIMB)
+    p = traj2.make_point()
+    _fill_point(p, 1)
+    traj2.append(p)
+    traj2.fix()
+    assert traj2.n_climb == 2
+
+    # Going to an earlier phase is still rejected.
+    traj3 = Trajectory()
+    traj3.set_phase(FlightPhase.CRUISE)
+    with pytest.raises(ValueError, match='cannot set flight phase to an earlier phase'):
+        traj3.set_phase(FlightPhase.CLIMB)
+
+
 def test_interpolate_time_out_of_bounds_yields_nan():
     """`Trajectory.interpolate_time` passes `left=np.nan, right=np.nan` to
     `np.interp`, so query times outside the existing flight_time range

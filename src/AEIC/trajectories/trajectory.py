@@ -152,11 +152,17 @@ class Trajectory(Container):
 
         This is used by trajectory builders to keep track of which phase of
         flight they're currently building, so that they can update the correct
-        phase point count field in the trajectory metadata."""
+        phase point count field in the trajectory metadata.
+
+        Re-entering the phase that's already current (e.g. a builder calling
+        this again mid-cruise, such as for a mid-cruise step climb) is a
+        no-op: it must NOT reset that phase's point count, or points already
+        appended under it would be silently dropped from the count."""
         if phase < self._current_phase:
             raise ValueError('cannot set flight phase to an earlier phase')
-        self._current_phase = phase
-        self._data[self._current_phase.field_name] = 0
+        if phase != self._current_phase:
+            self._current_phase = phase
+            self._data[self._current_phase.field_name] = 0
 
     def append(self, *args, **kwargs) -> None:
         """Override the append method to also update the current flight phase
