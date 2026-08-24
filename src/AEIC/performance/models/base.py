@@ -237,3 +237,31 @@ class BasePerformanceModel[RulesT](CIBaseModel, ABC):
     def maximum_mass(self) -> float:
         """Aircraft maximum mass, to be implemented by subclasses."""
         ...
+
+    @property
+    @abstractmethod
+    def minimum_tas(self) -> float:
+        """Minimum true airspeed [m/s] across the whole performance model.
+
+        Used only as a placeholder starting value for a trajectory point,
+        replaced by a feasible value on the first call to the performance
+        model. To be implemented by subclasses."""
+        ...
+
+    @property
+    @abstractmethod
+    def maximum_rocd(self) -> float:
+        """Maximum rate of climb/descent [m/s] across the whole performance
+        model.
+
+        Used only as a placeholder starting value for a trajectory point,
+        replaced by a feasible value on the first call to the performance
+        model. To be implemented by subclasses."""
+        ...
+
+    @property
+    @abstractmethod
+    def lowest_cruise_altitude(self) -> float:
+        """Lowest altitude [m] at which this model has cruise performance
+        data, to be implemented by subclasses."""
+        ...

@@ -33,7 +33,7 @@ from AEIC.performance.models.legacy import (
     ROCDFilter,
 )
 from AEIC.performance.types import AircraftState, Performance, SimpleFlightRules
-from AEIC.units import METERS_TO_FL
+from AEIC.units import FL_TO_METERS, METERS_TO_FL
 
 from .base import BasePerformanceModel
 
@@ -297,6 +297,28 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
             max(self._cruise_performance_table.mass),
             max(self._descent_performance_table.mass),
         )
+
+    @property
+    def minimum_tas(self) -> float:
+        return min(
+            min(self._climb_performance_table.tas),
+            min(self._cruise_performance_table.tas),
+            min(self._descent_performance_table.tas),
+        )
+
+    @property
+    def maximum_rocd(self) -> float:
+        return max(
+            max(self._climb_performance_table.rocd),
+            max(self._cruise_performance_table.rocd),
+            max(self._descent_performance_table.rocd),
+        )
+
+    @property
+    def lowest_cruise_altitude(self) -> float:
+        """Lowest altitude [m] at which this model has cruise performance
+        data."""
+        return min(self._cruise_performance_table.fl) * FL_TO_METERS
 
     def evaluate_impl(
         self, state: AircraftState, rules: SimpleFlightRules
