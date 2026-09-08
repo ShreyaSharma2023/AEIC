@@ -34,6 +34,7 @@ class OutputGrid:
     grid: Grid
     species: list[Species]
     accum: np.ndarray
+    lto_accum: np.ndarray
     min_ts: float
     n_slices: int
     input_store: Path
@@ -154,6 +155,21 @@ class OutputGrid:
                 if isinstance(alt, ISAPressureGrid):
                     slab = slab[::-1, :, :]
                 var[0, :, :, :] = slab
+
+            # Per-species LTO emissions variables. Units come from EMISSIONS_FIELDS
+            # in AEIC.emissions.emission (trajectory_emissions is in grams).
+            for i, sp in enumerate(self.species):
+                var = ds.createVariable(
+                    f'{sp.name.lower()}_lto',
+                    'f4',
+                    ('time', 'latitude', 'longitude'),
+                    zlib=True,
+                    complevel=4,
+                    shuffle=True,
+                )
+                var.units = 'g'
+                var.description = f'Gridded {sp.name} LTO emissions'
+                var[0, :, :] = self.lto_accum[..., i]
 
             # Minimal global attributes for quick identification.
             ds.aeic_version = VERSION

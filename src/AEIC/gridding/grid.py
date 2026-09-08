@@ -33,6 +33,12 @@ class HorizontalGrid(CIBaseModel):
     def bins(self) -> int:
         return int((self.range[1] - self.range[0]) / self.resolution)
 
+    def index(self, value: float) -> int:
+        """Get the bin index for a given value."""
+        if not self.range[0] <= value <= self.range[1]:
+            raise ValueError(f'Value {value} out of range {self.range}')
+        return int((value - self.range[0]) / self.resolution)
+
 
 class LatitudeGrid(HorizontalGrid):
     range: tuple[float, float] = Field(default=(-90.0, 90.0))

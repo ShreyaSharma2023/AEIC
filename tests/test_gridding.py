@@ -68,8 +68,13 @@ def _make_mission_db(path, timestamps):
     conn.close()
 
 
-def _write_zarr_slice(path, data, *, grid=None, filter_expr=None):
-    """Write a numpy array to a zarr store at the given path.
+def _lto_slice_path(path):
+    path = Path(path)
+    return path.with_name(f'{path.stem}-lto{path.suffix}')
+
+
+def _write_zarr_slice(path, data, *, lto_data=None, grid=None, filter_expr=None):
+    """Write trajectory and optional LTO zarr arrays for one map slice.
 
     If *grid* is provided, also writes the ``grid_json`` and ``filter_json``
     attributes that the reduce phase expects for metadata validation.
@@ -81,6 +86,11 @@ def _write_zarr_slice(path, data, *, grid=None, filter_expr=None):
         arr.attrs['filter_json'] = (
             filter_expr.model_dump_json() if filter_expr is not None else None
         )
+    if lto_data is not None:
+        lto_arr = zarr.create_array(
+            store=str(_lto_slice_path(path)), dtype='f4', shape=lto_data.shape
+        )
+        lto_arr[:] = lto_data
 
 
 # ---------------------------------------------------------------------------
@@ -94,14 +104,30 @@ def test_reduce_phase_happy_path(tmp_path):
     species = [Species.CO2, Species.H2O]
     nspecies = len(species)
     shape = grid.shape + (nspecies,)  # (nlat, nlon, nalt, nspecies)
+    nlat = grid.latitude.bins
+    nlon = grid.longitude.bins
+    lto_shape = (nlat, nlon, nspecies)
+
+    lto0 = np.zeros(lto_shape, dtype=np.float32)
+    lto0[:, :, 0] = np.arange(nlat)[:, None] * 1000 + np.arange(nlon)[None, :]
+    lto0[:, :, 1] = 10.0
+    lto1 = np.zeros(lto_shape, dtype=np.float32)
+    lto1[:, :, 0] = 5.0
+    lto1[:, :, 1] = 20.0
 
     # Create two zarr slice files: slice 0 is all 2.0, slice 1 is all 3.0.
     map_prefix = str(tmp_path / 'map')
     _write_zarr_slice(
-        f'{map_prefix}-00000.zarr', np.full(shape, 2.0, dtype=np.float32), grid=grid
+        f'{map_prefix}-00000.zarr',
+        np.full(shape, 2.0, dtype=np.float32),
+        lto_data=lto0,
+        grid=grid,
     )
     _write_zarr_slice(
-        f'{map_prefix}-00001.zarr', np.full(shape, 3.0, dtype=np.float32), grid=grid
+        f'{map_prefix}-00001.zarr',
+        np.full(shape, 3.0, dtype=np.float32),
+        lto_data=lto1,
+        grid=grid,
     )
 
     # Minimal mission DB: two timestamps spanning 2019.
@@ -137,6 +163,19 @@ def test_reduce_phase_happy_path(tmp_path):
             var = ds.variables[varname]
             assert var.units == 'g'
             assert np.isclose(float(var[0, :, :, :].sum()), expected_sum, rtol=1e-4)
+
+        # LTO variables are on the surface latitude/longitude grid.
+        expected_lto = {
+            Species.CO2: lto0[:, :, 0] + lto1[:, :, 0],
+            Species.H2O: lto0[:, :, 1] + lto1[:, :, 1],
+        }
+        for sp in species:
+            varname = f'{sp.name.lower()}_lto'
+            assert varname in ds.variables, f'Missing variable {varname}'
+            var = ds.variables[varname]
+            assert var.dimensions == ('time', 'latitude', 'longitude')
+            assert var.units == 'g'
+            assert np.allclose(var[0, :, :], expected_lto[sp])
 
         # Global attributes (minimal set)
         assert hasattr(ds, 'aeic_version')
@@ -182,10 +221,16 @@ def test_reduce_phase_pressure_grid(tmp_path):
     species = [Species.CO2]
     nspecies = len(species)
     shape = grid.shape + (nspecies,)
+    lto_data = np.full(
+        (grid.latitude.bins, grid.longitude.bins, nspecies), 4.0, dtype=np.float32
+    )
 
     map_prefix = str(tmp_path / 'map')
     _write_zarr_slice(
-        f'{map_prefix}-00000.zarr', np.full(shape, 1.0, dtype=np.float32), grid=grid
+        f'{map_prefix}-00000.zarr',
+        np.full(shape, 1.0, dtype=np.float32),
+        lto_data=lto_data,
+        grid=grid,
     )
 
     db_path = tmp_path / 'missions.sqlite'
@@ -227,6 +272,11 @@ def test_reduce_phase_pressure_grid(tmp_path):
         # Total sum preserved.
         n_cells = grid.latitude.bins * grid.longitude.bins * grid.altitude.bins
         assert np.isclose(float(co2_var[0, :, :, :].sum()), 1.0 * n_cells, rtol=1e-4)
+
+        # LTO emissions stay on the surface grid for pressure grids too.
+        co2_lto_var = ds.variables['co2_lto']
+        assert co2_lto_var.dimensions == ('time', 'latitude', 'longitude')
+        assert np.allclose(co2_lto_var[0, :, :], lto_data[:, :, 0])
 
 
 # ---------------------------------------------------------------------------
@@ -292,13 +342,18 @@ def test_reduce_phase_wrong_shape(tmp_path):
     species = [Species.CO2]
     correct_shape = grid.shape + (1,)
     wrong_shape = grid.shape + (99,)  # wrong species count
+    lto_shape = (grid.latitude.bins, grid.longitude.bins, 1)
     map_prefix = str(tmp_path / 'map')
 
     _write_zarr_slice(
-        f'{map_prefix}-00000.zarr', np.zeros(correct_shape, dtype=np.float32)
+        f'{map_prefix}-00000.zarr',
+        np.zeros(correct_shape, dtype=np.float32),
+        lto_data=np.zeros(lto_shape, dtype=np.float32),
     )
     _write_zarr_slice(
-        f'{map_prefix}-00001.zarr', np.zeros(wrong_shape, dtype=np.float32)
+        f'{map_prefix}-00001.zarr',
+        np.zeros(wrong_shape, dtype=np.float32),
+        lto_data=np.zeros(lto_shape, dtype=np.float32),
     )
 
     db_path = tmp_path / 'missions.sqlite'
@@ -345,10 +400,14 @@ def test_reduce_phase_trajectory_reproducibility(tmp_path):
     grid = Grid.load(grid_file)
     species = [Species.CO2]
     shape = grid.shape + (1,)
+    lto_shape = (grid.latitude.bins, grid.longitude.bins, 1)
 
     map_prefix = str(tmp_path / 'map')
     _write_zarr_slice(
-        f'{map_prefix}-00000.zarr', np.ones(shape, dtype=np.float32), grid=grid
+        f'{map_prefix}-00000.zarr',
+        np.ones(shape, dtype=np.float32),
+        lto_data=np.zeros(lto_shape, dtype=np.float32),
+        grid=grid,
     )
 
     db_path = tmp_path / 'missions.sqlite'
@@ -392,12 +451,14 @@ def test_reduce_phase_gridding_provenance(tmp_path):
     grid = Grid.load(grid_file)
     species = [Species.CO2]
     shape = grid.shape + (1,)
+    lto_shape = (grid.latitude.bins, grid.longitude.bins, 1)
 
     filter_expr = Filter(country='US')
     map_prefix = str(tmp_path / 'map')
     _write_zarr_slice(
         f'{map_prefix}-00000.zarr',
         np.ones(shape, dtype=np.float32),
+        lto_data=np.zeros(lto_shape, dtype=np.float32),
         grid=grid,
         filter_expr=filter_expr,
     )
@@ -446,10 +507,14 @@ def test_reduce_phase_no_filter_omits_variable(tmp_path):
     grid = Grid.load(grid_file)
     species = [Species.CO2]
     shape = grid.shape + (1,)
+    lto_shape = (grid.latitude.bins, grid.longitude.bins, 1)
 
     map_prefix = str(tmp_path / 'map')
     _write_zarr_slice(
-        f'{map_prefix}-00000.zarr', np.ones(shape, dtype=np.float32), grid=grid
+        f'{map_prefix}-00000.zarr',
+        np.ones(shape, dtype=np.float32),
+        lto_data=np.zeros(lto_shape, dtype=np.float32),
+        grid=grid,
     )
 
     db_path = tmp_path / 'missions.sqlite'
