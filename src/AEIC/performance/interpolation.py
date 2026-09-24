@@ -14,14 +14,12 @@ class Interpolator:
     """Grid-based interpolator for performance model data."""
 
     def __init__(self, df: pd.DataFrame):
-        # Requirements:
-        #  - Regular FL, regular mass ⇒ rectlinear grid;
-        #  - Dense: unique (FL, mass); #rows = #FL × #mass
-        #
-        # These conditions should be checked in the PerformanceTable
-        # constructor, but we check them here for security and testing
-        # purposes.
-        if len(list(zip(df.fl.values, df.mass.values))) != len(df):
+        # The table must have exactly one row for every (FL, mass) pair. A
+        # missing cell would otherwise be left as zero in the grid below and
+        # returned as if it were real performance data. A duplicated pair
+        # needs its own check: it can cancel out a missing cell in the row
+        # count.
+        if df.duplicated(subset=['fl', 'mass']).any():
             raise ValueError('Interpolator requires unique (FL, mass) pairs in data')
 
         # Coordinate values.
@@ -31,6 +29,12 @@ class Interpolator:
         masses = sorted(float(m) for m in df.mass.unique())
         self.min_mass = min(masses)
         self.max_mass = max(masses)
+
+        if len(fls) * len(masses) != len(df):
+            raise ValueError(
+                'Interpolator requires a row for every (FL, mass) pair: got '
+                f'{len(df)} rows for {len(fls)} flight levels x {len(masses)} masses'
+            )
 
         # If there is only one mass value, we need to do linear interpolation
         # in flight level. Otherwise we will be doing bilinear interpolation in
