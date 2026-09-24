@@ -10,15 +10,17 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import PositiveFloat, model_validator
+import pandas as pd
+from pydantic import PositiveFloat, PrivateAttr, model_validator
 
+from AEIC.performance.interpolation import Interpolator
 from AEIC.performance.types import (
     AircraftState,
     Performance,
     SimpleFlightRules,
     TableInput,
 )
-from AEIC.units import FL_TO_METERS
+from AEIC.units import FL_TO_METERS, METERS_TO_FL
 
 from .base import BasePerformanceModel, PerformanceTableInput
 
@@ -69,6 +71,30 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
             )
         return data
 
+    _climb_interpolator: Interpolator = PrivateAttr()
+    _descent_interpolator: Interpolator = PrivateAttr()
+
+    @model_validator(mode='after')
+    def build_interpolators(self) -> PianoPerformanceModel:
+        """Build the climb and descent interpolators when the model loads, so
+        a table with a hole in its (FL, mass) grid fails here, naming the
+        aircraft, rather than partway through a run."""
+        interpolators = {}
+        for phase in ('climb', 'descent'):
+            table = getattr(self, f'{phase}_flight_performance')
+            df = pd.DataFrame(
+                [row[: len(table.cols)] for row in table.data], columns=table.cols
+            )
+            try:
+                interpolators[phase] = Interpolator(df)
+            except ValueError as exc:
+                raise ValueError(
+                    f'PIANO {phase} table for {self.aircraft_name}: {exc}'
+                ) from exc
+        self._climb_interpolator = interpolators['climb']
+        self._descent_interpolator = interpolators['descent']
+        return self
+
     @property
     def empty_mass(self) -> float:
         """Operating empty mass."""
@@ -106,4 +132,22 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
     def evaluate_impl(
         self, state: AircraftState, rules: SimpleFlightRules
     ) -> Performance:
-        raise NotImplementedError('PIANO performance evaluation not yet implemented.')
+        """Bilinear interpolation in flight level and aircraft mass within the
+        phase table selected by the flight rules."""
+        fl = state.altitude * METERS_TO_FL
+        match rules:
+            case SimpleFlightRules.CLIMB:
+                interpolator = self._climb_interpolator
+            case SimpleFlightRules.DESCEND:
+                interpolator = self._descent_interpolator
+            case SimpleFlightRules.CRUISE:
+                raise NotImplementedError(
+                    'PIANO cruise performance evaluation not yet implemented.'
+                )
+
+        mass = state.aircraft_mass
+        if mass == 'min':
+            mass = interpolator.min_mass
+        elif mass == 'max':
+            mass = interpolator.max_mass
+        return interpolator(fl, mass)
