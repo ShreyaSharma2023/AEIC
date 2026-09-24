@@ -13,16 +13,40 @@ from typing import Any, Literal
 import pandas as pd
 from pydantic import PositiveFloat, PrivateAttr, model_validator
 
-from AEIC.performance.interpolation import Interpolator
+from AEIC.performance.interpolation import Interpolator, MachSweepInterpolator
 from AEIC.performance.types import (
     AircraftState,
     Performance,
     SimpleFlightRules,
+    SpeedData,
     TableInput,
 )
-from AEIC.units import FL_TO_METERS, METERS_TO_FL
+from AEIC.units import FEET_TO_METERS, FL_TO_METERS, METERS_TO_FL
+from AEIC.utils.standard_atmosphere import cas_to_tas, speed_of_sound_at_altitude
 
 from .base import BasePerformanceModel, PerformanceTableInput
+
+_FL100_M = 10000 * FEET_TO_METERS
+"""Altitude below which the low CAS of a speed schedule is flown [m]."""
+
+
+def cruise_mach_at_altitude(speeds: SpeedData, altitude: float) -> float:
+    """Mach number a cruise speed schedule flies at the given altitude [m].
+
+    The aircraft flies a constant CAS, the low one under FL100 and the high one
+    above it, until that CAS would exceed the schedule's design Mach, and the
+    design Mach from there up. Constant CAS gives a Mach number that rises with
+    altitude, so this is the lower of the design Mach and the Mach number of
+    the CAS. Standard atmosphere throughout, which is what PIANO tabulates.
+
+    Raises:
+        ValueError: If the schedule lacks either CAS value.
+    """
+    if speeds.cas_low is None or speeds.cas_high is None:
+        raise ValueError('a cruise speed schedule needs both cas_low and cas_high')
+    cas = speeds.cas_low if altitude < _FL100_M else speeds.cas_high
+    cas_mach = float(cas_to_tas(cas, altitude) / speed_of_sound_at_altitude(altitude))
+    return min(speeds.mach, cas_mach)
 
 
 class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
@@ -72,26 +96,32 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
         return data
 
     _climb_interpolator: Interpolator = PrivateAttr()
+    _cruise_interpolator: MachSweepInterpolator = PrivateAttr()
     _descent_interpolator: Interpolator = PrivateAttr()
 
     @model_validator(mode='after')
     def build_interpolators(self) -> PianoPerformanceModel:
-        """Build the climb and descent interpolators when the model loads, so
-        a table with a hole in its (FL, mass) grid fails here, naming the
-        aircraft, rather than partway through a run."""
+        """Build the phase interpolators when the model loads, so a table with a
+        hole in its (FL, mass) grid fails here, naming the aircraft, rather
+        than partway through a run."""
         interpolators = {}
-        for phase in ('climb', 'descent'):
+        for phase, interpolator_class in (
+            ('climb', Interpolator),
+            ('cruise', MachSweepInterpolator),
+            ('descent', Interpolator),
+        ):
             table = getattr(self, f'{phase}_flight_performance')
             df = pd.DataFrame(
                 [row[: len(table.cols)] for row in table.data], columns=table.cols
             )
             try:
-                interpolators[phase] = Interpolator(df)
+                interpolators[phase] = interpolator_class(df)
             except ValueError as exc:
                 raise ValueError(
                     f'PIANO {phase} table for {self.aircraft_name}: {exc}'
                 ) from exc
         self._climb_interpolator = interpolators['climb']
+        self._cruise_interpolator = interpolators['cruise']
         self._descent_interpolator = interpolators['descent']
         return self
 
@@ -133,7 +163,11 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
         self, state: AircraftState, rules: SimpleFlightRules
     ) -> Performance:
         """Bilinear interpolation in flight level and aircraft mass within the
-        phase table selected by the flight rules."""
+        phase table selected by the flight rules.
+
+        Cruise is also swept over Mach number, so it is evaluated at the Mach
+        number the cruise speed schedule flies at the aircraft's altitude (see
+        `cruise_mach_at_altitude`), which needs ``speeds.cruise``."""
         fl = state.altitude * METERS_TO_FL
         match rules:
             case SimpleFlightRules.CLIMB:
@@ -141,13 +175,27 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
             case SimpleFlightRules.DESCEND:
                 interpolator = self._descent_interpolator
             case SimpleFlightRules.CRUISE:
-                raise NotImplementedError(
-                    'PIANO cruise performance evaluation not yet implemented.'
-                )
+                interpolator = self._cruise_interpolator
 
         mass = state.aircraft_mass
         if mass == 'min':
             mass = interpolator.min_mass
         elif mass == 'max':
             mass = interpolator.max_mass
-        return interpolator(fl, mass)
+
+        if rules != SimpleFlightRules.CRUISE:
+            return interpolator(fl, mass)
+
+        if self.speeds.cruise is None:
+            raise ValueError(
+                f'PIANO cruise performance for {self.aircraft_name} needs '
+                'speeds.cruise: the cruise export sweeps Mach number and names '
+                'no operating speed, so it has to be supplied'
+            )
+        try:
+            mach = cruise_mach_at_altitude(self.speeds.cruise, state.altitude)
+            return self._cruise_interpolator(fl, mass, mach)
+        except ValueError as exc:
+            raise ValueError(
+                f'PIANO cruise performance for {self.aircraft_name}: {exc}'
+            ) from exc
