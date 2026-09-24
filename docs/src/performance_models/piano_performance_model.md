@@ -5,13 +5,6 @@ The {py:class}`PianoPerformanceModel
 performance model built from PIANO climb, cruise and descent exports. Files
 for this model type use `model_type = "piano"`.
 
-```{warning}
-The file format and the model builder are implemented, but performance
-evaluation is not: {py:meth}`evaluate_impl
-<AEIC.performance.models.PianoPerformanceModel.evaluate_impl>` raises
-`NotImplementedError`.
-```
-
 The source data is read by {py:mod}`AEIC.parsers.piano_reader`, which is
 documented in [PIANO reader](../parsers/piano_reader.md).
 
@@ -21,11 +14,45 @@ documented in [PIANO reader](../parsers/piano_reader.md).
    the legacy model is only swept over flight level and mass.
  * Each phase table carries thrust, drag and trajectory columns in addition to
    fuel flow, mass, flight level, TAS, and rate of climb/descent.
- * There is no fixed cruise speed data because Mach number is swept.
-   {py:attr}`speeds <AEIC.performance.models.BasePerformanceModel.speeds>` has
-   a `climb` and a `descent` entry but no `cruise` entry.
+ * There is no fixed cruise speed in the exports because Mach number is
+   swept. {py:attr}`speeds <AEIC.performance.models.BasePerformanceModel.speeds>`
+   has a `climb` and a `descent` entry read from the exports, and a `cruise`
+   entry only if the person building the model supplies one (see
+   [Cruise speed schedule](#cruise-speed-schedule)).
  * Two extra tables come along with the phase tables:
    `cruise_reference_mach` and `descent_idle_thrust`.
+
+## Performance evaluation
+
+Climb and descent are evaluated by bilinear interpolation in flight level and
+aircraft mass, as for the legacy model. Values outside the table are clipped to
+its edge rather than extrapolated. The mass of a climb or descent table row is
+the starting mass of its block.
+
+A model is checked when it is loaded: each phase table must have a row at every
+(flight level, mass) pair, and the cruise table must have a Mach sweep at every
+pair. A table with a gap is rejected, naming the aircraft and the phase, rather
+than being interpolated across the gap.
+
+Cruise is evaluated at the Mach number given by the cruise speed schedule (next
+section), interpolating linearly in Mach between the tabulated values in each
+(flight level, mass) cell. PIANO leaves out the speeds an aircraft cannot
+sustain at a given flight level and mass, so the Mach range can differ from cell
+to cell. Asking for a Mach outside the range of a cell the query needs is an
+error, since the nearest tabulated Mach is a different speed.
+
+## Cruise speed schedule
+
+Evaluating cruise performance needs `speeds.cruise`, which the exports do not
+provide. It holds `cas_low`, `cas_high` and `mach` (the design Mach), with CAS
+in m/s, and is supplied through the `cruise_speeds` argument of
+{py:func}`build_piano_model <AEIC.performance.model_builder.build_piano_model>`.
+Evaluating cruise without it is an error naming the aircraft.
+
+The aircraft flies a constant CAS, `cas_low` below FL100 and `cas_high` above,
+until the Mach number of that CAS reaches the design Mach, and the design Mach
+above that. This is the lower of the design Mach and the Mach number of the
+CAS at the aircraft's altitude, in a standard atmosphere.
 
 ## Operating empty mass
 
