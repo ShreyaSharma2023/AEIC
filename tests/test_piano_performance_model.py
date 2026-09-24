@@ -21,6 +21,7 @@ from AEIC.parsers.piano_reader.descent_reader import (
 )
 from AEIC.performance.model_builder import build_piano_model, write_performance_model
 from AEIC.performance.models import PerformanceModel, PianoPerformanceModel
+from AEIC.performance.types import SpeedData
 
 OPERATING_EMPTY_MASS = 37100
 
@@ -101,10 +102,23 @@ def test_loading_fails_without_an_operating_empty_mass(write_model):
         PerformanceModel.load(out_file)
 
 
-def test_no_cruise_speeds_are_written(build):
-    """PIANO sweeps many cruise Mach numbers, so the model states none."""
+def test_no_cruise_speeds_are_written_unless_supplied(build):
+    """The exports sweep many cruise Mach numbers and name no operating
+    speed, so the model states none unless the caller supplies one."""
     model = build()
     assert model.speeds.cruise is None
+    assert model.speeds.climb.mach == pytest.approx(0.750)
+    assert model.speeds.descent.mach == pytest.approx(0.750)
+
+
+def test_supplied_cruise_speeds_survive_the_round_trip(build):
+    model = build(
+        cruise_speeds=SpeedData(cas_low=128.611, cas_high=154.3332, mach=0.82)
+    )
+    assert model.speeds.cruise.mach == pytest.approx(0.82)
+    assert model.speeds.cruise.cas_low == pytest.approx(128.611)
+    assert model.speeds.cruise.cas_high == pytest.approx(154.3332)
+    # Supplying cruise speeds must not disturb the phases read from the files.
     assert model.speeds.climb.mach == pytest.approx(0.750)
     assert model.speeds.descent.mach == pytest.approx(0.750)
 
