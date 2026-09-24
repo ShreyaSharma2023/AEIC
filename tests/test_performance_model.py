@@ -8,10 +8,16 @@ from pathlib import Path
 import pytest
 
 from AEIC.config import config
+from AEIC.performance.model_builder import build_piano_model
 from AEIC.performance.model_selector import SimplePerformanceModelSelector
-from AEIC.performance.models import LegacyPerformanceModel, PerformanceModel
+from AEIC.performance.models import (
+    LegacyPerformanceModel,
+    PerformanceModel,
+    PianoPerformanceModel,
+)
 from AEIC.performance.models.legacy import ROCDFilter
 from AEIC.performance.types import AircraftState, SimpleFlightRules, ThrustMode
+from AEIC.units import FL_TO_METERS
 
 
 def test_performance_model_initialization():
@@ -49,6 +55,53 @@ def test_performance_model_initialization():
     perf = model.evaluate(state, SimpleFlightRules.CRUISE)
     assert math.isfinite(perf.true_airspeed) and perf.true_airspeed > 0
     assert math.isfinite(perf.fuel_flow) and perf.fuel_flow > 0
+
+
+@pytest.fixture(params=['legacy', 'piano'])
+def any_performance_model(request, performance_model, piano_data, lto):
+    if request.param == 'legacy':
+        return performance_model
+    return build_piano_model(
+        piano_data,
+        lto,
+        aircraft_class='narrow',
+        number_of_engines=2,
+        maximum_payload=18000,
+        operating_empty_mass=37100,
+    )
+
+
+def _phase_column(model, phase: str, name: str) -> list[float]:
+    """Read a phase table column straight from the model's tables, so the
+    expected values below don't go through the properties under test."""
+    if isinstance(model, PianoPerformanceModel):
+        return getattr(model, f'{phase}_flight_performance').column(name)
+    rocd_filter = {
+        'climb': ROCDFilter.POSITIVE,
+        'cruise': ROCDFilter.ZERO,
+        'descent': ROCDFilter.NEGATIVE,
+    }[phase]
+    return list(getattr(model.performance_table(rocd_filter), name))
+
+
+def test_performance_model_reports_its_speed_rocd_and_cruise_floor_envelope(
+    any_performance_model,
+):
+    """The trajectory builders read these to seed a flight's first point and
+    starting mass before the model has been evaluated, so every model type
+    has to provide them."""
+    model = any_performance_model
+    phases = ('climb', 'cruise', 'descent')
+
+    assert model.minimum_tas == min(
+        v for p in phases for v in _phase_column(model, p, 'tas')
+    )
+    assert model.maximum_rocd == max(
+        v for p in phases for v in _phase_column(model, p, 'rocd')
+    )
+    assert model.lowest_cruise_altitude == pytest.approx(
+        min(_phase_column(model, 'cruise', 'fl')) * FL_TO_METERS
+    )
 
 
 def test_performance_model_selection(performance_model_selector, sample_missions):
