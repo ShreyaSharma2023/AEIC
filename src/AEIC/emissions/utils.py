@@ -1,29 +1,26 @@
 # TODO: Remove this when we migrate to Python 3.14+.
 from __future__ import annotations
 
+import functools
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from AEIC.config import config
-from AEIC.performance.types import (
-    LTOPerformance,
-    ThrustMode,
-    ThrustModeArray,
-    ThrustModeValues,
-)
+from AEIC.performance.edb import EDBEntry
+from AEIC.performance.types import ThrustMode, ThrustModeArray, ThrustModeValues
 from AEIC.types import Species, SpeciesValues
 
-from .ei.nvpm import calculate_nvPM_scope11_LTO, nvPMProfileLTO
+from .ei.nvpm import nvPMProfileLTO, scope11_profile_for_engine
 from .ei.sox import EI_SOx
 
 if TYPE_CHECKING:
     from AEIC.types import Fuel
 
 
-def scope11_profile(lto: LTOPerformance) -> nvPMProfileLTO:
-    profile = calculate_nvPM_scope11_LTO(lto.SN_matrix, lto.engine_type, lto.BP_Ratio)
-    return profile
+@functools.cache
+def scope11_profile(edb: EDBEntry) -> nvPMProfileLTO:
+    return scope11_profile_for_engine(edb)
 
 
 def constant_species_values(fuel: Fuel) -> SpeciesValues[float]:

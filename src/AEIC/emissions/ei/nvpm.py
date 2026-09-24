@@ -5,7 +5,8 @@ import numpy as np
 
 from AEIC.constants import T0, kappa, p0
 from AEIC.emissions.types import AtmosphericState
-from AEIC.performance.types import LTOPerformance, ThrustMode, ThrustModeValues
+from AEIC.performance.edb import EDBEntry
+from AEIC.performance.types import ThrustMode, ThrustModeValues
 from AEIC.units import METERS_TO_FEET
 
 
@@ -22,7 +23,7 @@ class nvPMProfileTrajectory:
 
 
 def nvPM_MEEM(
-    lto_data: LTOPerformance,
+    edb_data: EDBEntry,
     altitudes: np.ndarray,
     rocd: np.ndarray,
     atmospheric_state: AtmosphericState,
@@ -34,8 +35,8 @@ def nvPM_MEEM(
 
     Parameters
     ----------
-    lto_data : LTOPerformance
-        LTO engine data from the performance model.
+    edb_data : EDBEntry
+        Engine database data for the selected engine.
     altitudes : ndarray
         Array of flight altitudes [m] over the mission trajectory.
     rocd : ndarray
@@ -67,29 +68,25 @@ def nvPM_MEEM(
     #
     # MEEM requires EImass [mg/kg] and EInum [#/kg] at the four ICAO LTO
     # thrust settings (7/30/85/100 %).  Two sources are available:
-    #   (a) Direct nvPM measurements: used when all four mode
+    #   (a) Direct EDB nvPM measurements: used when all four mode
     #       values are positive and therefore valid.
     #   (b) SCOPE11 fallback: when the engine only has smoke-number (SN) data,
     #       calculate_nvPM_scope11_LTO() converts SN → EImass/EInum via the
     #       SCOPE11 correlations (Eqs. 1–5 in the paper, Fig. 2).
     # -------------------------------------------------------------------------
-    use_measured_nvpm = all(
-        lto_data.nvPM_mass_matrix[mode] > 0.0 and lto_data.nvPM_num_matrix[mode] > 0.0
+    use_edb_nvpm = all(
+        edb_data.nvPM_mass_matrix[mode] > 0.0 and edb_data.nvPM_num_matrix[mode] > 0.0
         for mode in ThrustMode
     )
 
-    if use_measured_nvpm:
-        # Path (a): use supplied nvPM data directly.
-        EI_mass_mode = lto_data.nvPM_mass_matrix.as_array()  # mg/kg
-        EI_num_mode = lto_data.nvPM_num_matrix.as_array()  # #/kg
+    if use_edb_nvpm:
+        # Path (a): use EDB nvPM data directly.
+        EI_mass_mode = edb_data.nvPM_mass_matrix.as_array()  # mg/kg
+        EI_num_mode = edb_data.nvPM_num_matrix.as_array()  # #/kg
     else:
         # Path (b): SCOPE11 fallback — derives EI from smoke numbers.
         # Returns mass in g/kg; convert to mg/kg (* 1000) to keep units
-        profile = calculate_nvPM_scope11_LTO(
-            lto_data.SN_matrix,
-            lto_data.engine_type,
-            lto_data.BP_Ratio,
-        )
+        profile = scope11_profile_for_engine(edb_data)
         EI_mass_mode = 1000.0 * profile.mass.as_array()  # g/kg → mg/kg
         EI_num_mode = (
             profile.number.as_array()
@@ -103,7 +100,7 @@ def nvPM_MEEM(
     # Estimate combustor inlet pressure P3 and temperature T3 at each
     # trajectory point.  The paper's approach (Eqs. 6–9, Fig. 4, Table 3)
     # -------------------------------------------------------------------------
-    opr_pi00 = lto_data.PR[ThrustMode.TAKEOFF]
+    opr_pi00 = edb_data.PR[ThrustMode.TAKEOFF]
 
     # Compressor efficiency (Table 3): 0.88 for climb/cruise, 0.70 for descent.
     eta_comp = np.where(rocd < 0, 0.70, 0.88)
@@ -209,15 +206,16 @@ def calculate_nvPM_scope11_LTO(
     """
     Calculate PM non-volatile Emission Index (EI) using SCOPE11 methodology (2019).
 
+    This is itself a fallback (used when the EDB has no direct nvPM
+    measurement for the engine), so a mode with no valid smoke number
+    either means the engine's nvPM emissions cannot be estimated by any
+    method AEIC has; see ``Raises`` below.
+
     Parameters
     ----------
     SN_matrix : ThrustModeValues
         Smoke number matrix for each ICAO mode. Sentinel values
-        ``SN == -1`` and ``SN == 0`` are treated as "no measurement
-        available" — the corresponding mode is skipped and both
-        ``mass[mode]`` and ``number[mode]`` come back as ``0.0`` in the
-        returned profile. Callers that need to distinguish "skipped"
-        from "computed-as-zero" should check the input SN themselves.
+        ``SN == -1`` and ``SN == 0`` mean "no measurement available".
     ENGINE_TYPE : str
         Engine type ('TF', 'MTF', etc.).
     BP_Ratio : float
@@ -227,8 +225,13 @@ def calculate_nvPM_scope11_LTO(
     -------
     nvPMProfile
         nvPM mass and number emission indices [g/kg and #/kg fuel].
-        Modes whose ``SN_matrix`` entry is the -1 / 0 sentinel come
-        back as 0.0 (see above).
+
+    Raises
+    ------
+    ValueError
+        If any mode's ``SN_matrix`` entry is the -1 / 0 "no measurement"
+        sentinel. Estimating that mode as zero would silently understate
+        emissions rather than surface the missing data.
     """
 
     # Air to fuel ration at four LTO points, estimated by Wayson et al. (2009)
@@ -247,9 +250,12 @@ def calculate_nvPM_scope11_LTO(
     for mode in ThrustMode:
         SN = SN_matrix[mode]
 
-        # --- Skip invalid SN
         if SN == -1 or SN == 0:
-            continue
+            raise ValueError(
+                f'No usable nvPM data for {mode.name} mode: no direct EDB '
+                f'nvPM measurement and no valid smoke number to estimate '
+                f'from (SN={SN}).'
+            )
 
         # --- Exit Plane BC Concentration C_BC,e [ug/m3]
         SN = min(SN, 40)
@@ -296,3 +302,18 @@ def calculate_nvPM_scope11_LTO(
         nvPM_EI_mass_g_per_kg,
         nvPM_EI_num_particle_per_kg,
     )
+
+
+def scope11_profile_for_engine(edb_data: EDBEntry) -> nvPMProfileLTO:
+    """SCOPE11 fallback profile for one engine, with the engine's UID
+    attached to any "no usable nvPM data" error so a fleet-wide run can
+    identify which aircraft/engine needs attention instead of just which
+    thrust mode."""
+    try:
+        return calculate_nvPM_scope11_LTO(
+            edb_data.SN_matrix, edb_data.engine_type, edb_data.BP_Ratio
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f'Engine UID {edb_data.uid} ({edb_data.engine}): {exc}'
+        ) from exc
