@@ -24,7 +24,7 @@ from pydantic import PrivateAttr, model_validator
 from scipy.interpolate import interpn
 
 from AEIC.performance.types import AircraftState, Performance, SimpleFlightRules
-from AEIC.units import METERS_TO_FL
+from AEIC.units import FL_TO_METERS, METERS_TO_FL
 
 from .base import BasePerformanceModel, PerformanceTableInput
 
@@ -362,6 +362,10 @@ class LegacyPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
             min(self._cruise_performance_table.tas),
             min(self._descent_performance_table.tas),
         )
+
+    @property
+    def lowest_cruise_altitude(self) -> float:
+        return min(self._cruise_performance_table.fl) * FL_TO_METERS
 
     def performance_table(self, rocd_filter: ROCDFilter) -> PerformanceTable:
         """Performance table accessor."""

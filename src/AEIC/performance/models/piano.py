@@ -18,6 +18,7 @@ from AEIC.performance.types import (
     SimpleFlightRules,
     TableInput,
 )
+from AEIC.units import FL_TO_METERS
 
 from .base import BasePerformanceModel, PerformanceTableInput
 
@@ -81,6 +82,26 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
             max(self.cruise_flight_performance.column('mass')),
             max(self.descent_flight_performance.column('mass')),
         )
+
+    @property
+    def minimum_tas(self) -> float:
+        return min(
+            min(self.climb_flight_performance.column('tas')),
+            min(self.cruise_flight_performance.column('tas')),
+            min(self.descent_flight_performance.column('tas')),
+        )
+
+    @property
+    def maximum_rocd(self) -> float:
+        return max(
+            max(self.climb_flight_performance.column('rocd')),
+            max(self.cruise_flight_performance.column('rocd')),
+            max(self.descent_flight_performance.column('rocd')),
+        )
+
+    @property
+    def lowest_cruise_altitude(self) -> float:
+        return min(self.cruise_flight_performance.column('fl')) * FL_TO_METERS
 
     def evaluate_impl(
         self, state: AircraftState, rules: SimpleFlightRules
