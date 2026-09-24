@@ -711,23 +711,27 @@ class Test_nvPMScope11:
         assert mtf.number[ThrustMode.IDLE] > 0
         assert tf.number[ThrustMode.IDLE] > 0
 
-    def test_scope11_invalid_smoke_numbers_return_zero(self):
-        """Per `emissions/ei/nvpm.py`, smoke numbers ≤ 0 are treated as
-        invalid and the SUT must emit zero in both mass and number for
-        the corresponding modes. Bug guard: a future refactor that
-        propagated -1.0 / 0.0 through the CBC0 expression would either
-        produce NaN or a negative emission — both of which would slip
-        through if only "non-zero" was asserted.
+    def test_scope11_raises_when_a_mode_has_no_valid_smoke_number(self):
+        """`SN == -1` and `SN == 0` mean "no smoke-number measurement" --
+        this is the SCOPE11 fallback's own fallback, so if it also has
+        nothing to work with for a mode, the aircraft's nvPM emissions
+        cannot be estimated at all. Silently returning zero there would
+        understate emissions with no indication anything was wrong, so
+        this must raise and name the offending mode rather than
+        continue past it.
         """
-        # IDLE has a finite positive SN so the rest of the modes can be
-        # invalid without the SUT raising on a degenerate input set.
-        SN_matrix = ThrustModeValues(5.0, 50.0, -1.0, 0.0)
-        for engine_type in ('MTF', 'TF'):
-            profile = calculate_nvPM_scope11_LTO(SN_matrix, engine_type, BP_Ratio=2.0)
-            assert profile.mass[ThrustMode.CLIMB] == 0.0
-            assert profile.mass[ThrustMode.TAKEOFF] == 0.0
-            assert profile.number[ThrustMode.CLIMB] == 0.0
-            assert profile.number[ThrustMode.TAKEOFF] == 0.0
+        # IDLE has a finite positive SN so the raise is attributable to
+        # CLIMB specifically, not just "any invalid mode in the matrix".
+        SN_matrix = ThrustModeValues(5.0, 50.0, -1.0, 40.0)
+        with pytest.raises(ValueError, match='CLIMB'):
+            calculate_nvPM_scope11_LTO(SN_matrix, 'TF', BP_Ratio=2.0)
+
+    def test_scope11_raises_on_the_zero_sentinel_too(self):
+        """`SN == 0` is the other documented "no measurement" sentinel,
+        distinct from an actually-measured zero smoke number."""
+        SN_matrix = ThrustModeValues(5.0, 50.0, 30.0, 0.0)
+        with pytest.raises(ValueError, match='TAKEOFF'):
+            calculate_nvPM_scope11_LTO(SN_matrix, 'TF', BP_Ratio=2.0)
 
 
 # Integration tests

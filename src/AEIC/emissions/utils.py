@@ -11,7 +11,7 @@ from AEIC.performance.edb import EDBEntry
 from AEIC.performance.types import ThrustMode, ThrustModeArray, ThrustModeValues
 from AEIC.types import Species, SpeciesValues
 
-from .ei.nvpm import calculate_nvPM_scope11_LTO, nvPMProfileLTO
+from .ei.nvpm import nvPMProfileLTO, scope11_profile_for_engine
 from .ei.sox import EI_SOx
 
 if TYPE_CHECKING:
@@ -20,8 +20,7 @@ if TYPE_CHECKING:
 
 @functools.cache
 def scope11_profile(edb: EDBEntry) -> nvPMProfileLTO:
-    profile = calculate_nvPM_scope11_LTO(edb.SN_matrix, edb.engine_type, edb.BP_Ratio)
-    return profile
+    return scope11_profile_for_engine(edb)
 
 
 def constant_species_values(fuel: Fuel) -> SpeciesValues[float]:

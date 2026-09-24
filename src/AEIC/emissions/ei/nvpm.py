@@ -86,11 +86,7 @@ def nvPM_MEEM(
     else:
         # Path (b): SCOPE11 fallback — derives EI from smoke numbers.
         # Returns mass in g/kg; convert to mg/kg (* 1000) to keep units
-        profile = calculate_nvPM_scope11_LTO(
-            edb_data.SN_matrix,
-            edb_data.engine_type,
-            edb_data.BP_Ratio,
-        )
+        profile = scope11_profile_for_engine(edb_data)
         EI_mass_mode = 1000.0 * profile.mass.as_array()  # g/kg → mg/kg
         EI_num_mode = (
             profile.number.as_array()
@@ -210,15 +206,16 @@ def calculate_nvPM_scope11_LTO(
     """
     Calculate PM non-volatile Emission Index (EI) using SCOPE11 methodology (2019).
 
+    This is itself a fallback (used when the EDB has no direct nvPM
+    measurement for the engine), so a mode with no valid smoke number
+    either means the engine's nvPM emissions cannot be estimated by any
+    method AEIC has; see ``Raises`` below.
+
     Parameters
     ----------
     SN_matrix : ThrustModeValues
         Smoke number matrix for each ICAO mode. Sentinel values
-        ``SN == -1`` and ``SN == 0`` are treated as "no measurement
-        available" — the corresponding mode is skipped and both
-        ``mass[mode]`` and ``number[mode]`` come back as ``0.0`` in the
-        returned profile. Callers that need to distinguish "skipped"
-        from "computed-as-zero" should check the input SN themselves.
+        ``SN == -1`` and ``SN == 0`` mean "no measurement available".
     ENGINE_TYPE : str
         Engine type ('TF', 'MTF', etc.).
     BP_Ratio : float
@@ -228,8 +225,13 @@ def calculate_nvPM_scope11_LTO(
     -------
     nvPMProfile
         nvPM mass and number emission indices [g/kg and #/kg fuel].
-        Modes whose ``SN_matrix`` entry is the -1 / 0 sentinel come
-        back as 0.0 (see above).
+
+    Raises
+    ------
+    ValueError
+        If any mode's ``SN_matrix`` entry is the -1 / 0 "no measurement"
+        sentinel. Estimating that mode as zero would silently understate
+        emissions rather than surface the missing data.
     """
 
     # Air to fuel ration at four LTO points, estimated by Wayson et al. (2009)
@@ -248,9 +250,12 @@ def calculate_nvPM_scope11_LTO(
     for mode in ThrustMode:
         SN = SN_matrix[mode]
 
-        # --- Skip invalid SN
         if SN == -1 or SN == 0:
-            continue
+            raise ValueError(
+                f'No usable nvPM data for {mode.name} mode: no direct EDB '
+                f'nvPM measurement and no valid smoke number to estimate '
+                f'from (SN={SN}).'
+            )
 
         # --- Exit Plane BC Concentration C_BC,e [ug/m3]
         SN = min(SN, 40)
@@ -297,3 +302,18 @@ def calculate_nvPM_scope11_LTO(
         nvPM_EI_mass_g_per_kg,
         nvPM_EI_num_particle_per_kg,
     )
+
+
+def scope11_profile_for_engine(edb_data: EDBEntry) -> nvPMProfileLTO:
+    """SCOPE11 fallback profile for one engine, with the engine's UID
+    attached to any "no usable nvPM data" error so a fleet-wide run can
+    identify which aircraft/engine needs attention instead of just which
+    thrust mode."""
+    try:
+        return calculate_nvPM_scope11_LTO(
+            edb_data.SN_matrix, edb_data.engine_type, edb_data.BP_Ratio
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f'Engine UID {edb_data.uid} ({edb_data.engine}): {exc}'
+        ) from exc
