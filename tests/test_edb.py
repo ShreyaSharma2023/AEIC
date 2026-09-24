@@ -53,6 +53,77 @@ def test_get_EDB_data_for_engine_raises_when_uid_absent(
         EDBEntry.get_engine(dummy_path, uid=query_uid)
 
 
+def _full_gaseous_row(uid: str) -> pd.DataFrame:
+    """A single gaseous-sheet row covering every column `EDBEntry.get_engine`
+    reads, so a `strict=False` lookup has real SN/PR data to fall back on."""
+    row = {
+        'UID No': [uid],
+        'Engine Identification': ['Test Engine'],
+        'Eng Type': ['TF'],
+        'B/P Ratio': [5.1],
+        'Rated Thrust (kN)': [120.0],
+        'Pressure Ratio': [29.0],
+    }
+    for label in ('T/O', 'C/O', 'App', 'Idle'):
+        row[f'Fuel Flow {label} (kg/sec)'] = [1.0]
+        row[f'CO EI {label} (g/kg)'] = [1.0]
+        row[f'HC EI {label} (g/kg)'] = [1.0]
+        row[f'NOx EI {label} (g/kg)'] = [1.0]
+        row[f'SN {label}'] = [10.0]
+    return pd.DataFrame(row)
+
+
+def test_get_engine_with_strict_false_zero_fills_nvpm_when_uid_absent_from_nvpm_sheet(
+    tmp_path, monkeypatch
+):
+    """`strict=False` must not raise when the nvPM sheet lacks the UID, and the
+    entry it returns must still carry real gaseous-sheet data (SN, PR) -- that
+    is what lets the SCOPE11 fallback in `emissions/ei/nvpm.py` still work for
+    this engine instead of a hard zero.
+    """
+    uid = '999'
+    gaseous = _full_gaseous_row(uid)
+    nvpm = pd.DataFrame({'UID No': []})
+
+    dummy_path = tmp_path / "edb.xlsx"
+    dummy_path.touch()
+    monkeypatch.setattr(
+        "AEIC.performance.edb.pd.ExcelFile",
+        lambda _: DummyExcelFile(gaseous, nvpm),
+    )
+
+    entry = EDBEntry.get_engine(dummy_path, uid=uid, strict=False)
+
+    assert entry.nvPM_mass_matrix == ThrustModeValues(0.0)
+    assert entry.nvPM_num_matrix == ThrustModeValues(0.0)
+    assert entry.EImass_max == 0.0
+    assert entry.EInum_max == 0.0
+    # Gaseous-sheet data is unaffected by the missing nvPM row.
+    assert entry.SN_matrix == ThrustModeValues(10.0)
+    assert entry.PR == ThrustModeValues(29.0)
+
+
+def test_get_engine_with_strict_true_still_raises_when_uid_absent_from_nvpm_sheet(
+    tmp_path, monkeypatch
+):
+    """Pins that `strict` defaults to `True` -- the previous test's
+    non-raising behavior comes from the explicit `strict=False`, not a
+    change to the default."""
+    uid = '999'
+    gaseous = _full_gaseous_row(uid)
+    nvpm = pd.DataFrame({'UID No': []})
+
+    dummy_path = tmp_path / "edb.xlsx"
+    dummy_path.touch()
+    monkeypatch.setattr(
+        "AEIC.performance.edb.pd.ExcelFile",
+        lambda _: DummyExcelFile(gaseous, nvpm),
+    )
+
+    with pytest.raises(ValueError, match="not found in sheet 'nvPM Emissions'"):
+        EDBEntry.get_engine(dummy_path, uid=uid)
+
+
 _SAMPLE_EDB_UID = "01P11CM121"
 
 
