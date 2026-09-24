@@ -22,13 +22,15 @@ from AEIC.performance.types import LTOPerformance
 ###########################################
 
 
-def lto_from_edb(engine_file, engine_uid, thrust_fractions) -> LTOPerformance:
+def lto_from_edb(
+    engine_file, engine_uid, thrust_fractions, strict: bool = True
+) -> LTOPerformance:
     if engine_file is None or engine_uid is None:
         raise ValueError(
             'Both --engine-file and --engine-uid must be provided when '
             'using "edb" as the LTO source.'
         )
-    edb_data = EDBEntry.get_engine(engine_file, engine_uid)
+    edb_data = EDBEntry.get_engine(engine_file, engine_uid, strict=strict)
     return edb_data.make_lto_performance(thrust_fractions)
 
 
@@ -47,9 +49,15 @@ def lto_from_toml(lto_file) -> LTOPerformance:
 
 
 def resolve_lto(
-    lto_source, engine_file, engine_uid, thrust_fractions, lto_file
+    lto_source, engine_file, engine_uid, thrust_fractions, lto_file, strict: bool = True
 ) -> LTOPerformanceInput:
-    """Resolve LTO data from the shared options into performance model input."""
+    """Resolve LTO data from the shared options into performance model input.
+
+    `strict` controls whether a missing nvPM-sheet entry for the engine UID
+    raises (the default) or is treated as absent, letting emissions
+    calculation fall back to the SCOPE11 smoke-number-based estimate instead
+    of a direct EDB nvPM measurement. See `emissions/ei/nvpm.py`.
+    """
     if engine_file is not None:
         engine_file = config.file_location(engine_file)
 
@@ -57,7 +65,7 @@ def resolve_lto(
     # TOML file
     match lto_source:
         case 'edb':
-            lto = lto_from_edb(engine_file, engine_uid, thrust_fractions)
+            lto = lto_from_edb(engine_file, engine_uid, thrust_fractions, strict)
         case 'custom':
             lto = lto_from_toml(lto_file)
         case _:

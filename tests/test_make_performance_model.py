@@ -9,6 +9,7 @@ from AEIC.commands.make_performance_model import (
     resolve_lto,
 )
 from AEIC.config import config
+from AEIC.performance.edb import EDBEntry
 from AEIC.performance.model_builder import build_legacy_model, write_performance_model
 from AEIC.performance.models.base import LTOPerformanceInput
 
@@ -73,6 +74,32 @@ def test_resolve_lto_from_edb():
     assert isinstance(lto, LTOPerformanceInput)
     assert lto.source == 'EDB'
     assert lto.ICAO_UID == ENGINE_UID
+
+
+def _spy_on_get_engine(monkeypatch, captured):
+    """Wrap the real `EDBEntry.get_engine` to record the `strict` kwarg it's
+    called with, without recursing into the patched method itself."""
+    original = EDBEntry.get_engine
+
+    def spy(excel_file, uid, strict=True):
+        captured['strict'] = strict
+        return original(excel_file, uid, strict=strict)
+
+    monkeypatch.setattr('AEIC.commands.make_performance_model.EDBEntry.get_engine', spy)
+
+
+def test_resolve_lto_from_edb_defaults_to_a_strict_lookup(monkeypatch):
+    captured = {}
+    _spy_on_get_engine(monkeypatch, captured)
+    resolve_lto('edb', ENGINE_FILE, ENGINE_UID, THRUST_FRACTIONS, None)
+    assert captured['strict'] is True
+
+
+def test_resolve_lto_from_edb_forwards_a_non_strict_lookup(monkeypatch):
+    captured = {}
+    _spy_on_get_engine(monkeypatch, captured)
+    resolve_lto('edb', ENGINE_FILE, ENGINE_UID, THRUST_FRACTIONS, None, strict=False)
+    assert captured['strict'] is False
 
 
 @pytest.mark.parametrize(
