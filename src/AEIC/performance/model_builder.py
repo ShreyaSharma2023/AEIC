@@ -28,7 +28,7 @@ from AEIC.performance.models import (
     PianoPerformanceModel,
 )
 from AEIC.performance.models.base import LTOPerformanceInput
-from AEIC.performance.types import Speeds, TableInput
+from AEIC.performance.types import SpeedData, Speeds, TableInput
 
 if TYPE_CHECKING:
     from AEIC.parsers.piano_reader import PianoData
@@ -408,6 +408,7 @@ def build_piano_model(
     apu_name: str | None = None,
     aircraft_name: str | None = None,
     maximum_altitude_ft: int | None = None,
+    cruise_speeds: SpeedData | None = None,
 ) -> PianoPerformanceModel:
     """Build a PIANO performance model from parsed PIANO outputs.
 
@@ -423,6 +424,10 @@ def build_piano_model(
         aircraft_name: Aircraft name, overriding the cruise file title.
         maximum_altitude_ft: Maximum altitude [feet], overriding the highest
             altitude any climb block reaches.
+        cruise_speeds: Cruise speed schedule (CAS in m/s), or None to state
+            none. The cruise export sweeps Mach number and names no operating
+            speed, so this has to come from the caller; evaluating cruise
+            performance needs it.
 
     Returns:
         Built model.
@@ -443,9 +448,7 @@ def build_piano_model(
         apu_name=apu_name,
         speeds=Speeds(
             climb=piano_data.climb_speeds,
-            # PIANO sweeps many cruise Mach numbers, so setting SpeedData for cruise
-            # is meaningless. PianoPerformanceModel will pick cruise speed.
-            cruise=None,
+            cruise=cruise_speeds,
             descent=piano_data.descent_speeds,
         ),
         lto_performance=lto,
