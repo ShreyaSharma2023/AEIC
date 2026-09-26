@@ -247,3 +247,19 @@ def test_invalid_adjustments_raise_value_error(
         tb.AdjustableLegacyBuilder(options=tb.Options(iterate_mass=False)).fly(
             performance_model, sample_missions[0], **kwargs
         )
+
+
+def test_adjustable_legacy_ground_distance_iter(sample_missions, performance_model):
+    """Ground-distance iteration is implemented once, in `Builder`, against
+    `descent_dist_approx`; it must also converge for the adjustable builder,
+    whose context defines that attribute too."""
+    mission = sample_missions[0]
+
+    builder = tb.AdjustableLegacyBuilder(
+        options=tb.Options(iterate_mass=False, iterate_ground_distance=True)
+    )
+    traj = builder.fly(performance_model, mission)
+
+    assert float(traj.ground_distance[-1]) == pytest.approx(
+        _ground_track(mission).total_distance, abs=1.0
+    )

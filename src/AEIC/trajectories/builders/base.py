@@ -36,6 +36,28 @@ class Options:
     mass_iter_reltol: float = 1e-2
     """Desired relative tolerance for mass iteration. Defaults to 1e-2."""
 
+    iterate_ground_distance: bool = False
+    """Flag controlling whether `descent_dist_approx` -- the static estimate
+    of descent distance used to decide where cruise ends and descent begins
+    -- is iterated on to match the ground distance actually flown during
+    descent. The static estimate (18.228347 * altitude drop) assumes a fixed
+    descent ground speed; real descent ground speed depends on wind and the
+    performance model's actual idle-descent profile, so without this the
+    trajectory can land short of or past the destination. Only meaningful
+    for builders whose Context defines `descent_dist_approx` (currently
+    `LegacyContext` and `AdjustableLegacyContext`); using it with any other
+    builder raises `RuntimeError`. Each ground-distance iteration re-runs mass
+    iteration (if enabled) at the new cruise/descent split, so the worst-case
+    cost is `max_dist_iters * max_mass_iters` flight simulations."""
+
+    max_dist_iters: int = 5
+    """Maximum number of ground-distance iterations (if used). Defaults to
+    5."""
+
+    dist_iter_reltol: float = 1e-2
+    """Desired relative tolerance for ground-distance iteration, as a
+    fraction of `descent_dist_approx`. Defaults to 1e-2."""
+
 
 @dataclass
 class Context:
@@ -204,7 +226,12 @@ class Builder(ABC):
                     "Trajectory optimization is not yet implemented."
                 )
 
-            if self.options.iterate_mass:
+            if self.options.iterate_ground_distance:
+                # Iterate on descent_dist_approx to minimize the ground
+                # distance residual (nests mass iteration, if enabled, at each
+                # guess).
+                traj = self._iterate_ground_distance()
+            elif self.options.iterate_mass:
                 # Iterate on starting mass to minimize mass residual.
                 traj = self._iterate_mass()
             else:
@@ -264,6 +291,57 @@ class Builder(ABC):
             )
 
         return traj
+
+    def _iterate_ground_distance(self) -> Trajectory:
+        """Iterate on `descent_dist_approx` to minimize the ground distance
+        residual.
+
+        `descent_dist_approx` is a static estimate, made before the flight, of
+        how far the descent will travel, used only to decide where cruise
+        ends. The descent itself is flown level by level, independently of
+        that estimate, so the distance it actually covers comes out
+        differently (wind, and the performance model's actual idle-descent
+        speed, both diverge from the estimate's assumptions). At convergence
+        `descent_dist_approx` equals the flown descent distance, so each
+        iteration just feeds the measured value back in: a direct fixed-point
+        update, not a scaled residual correction like mass iteration.
+        """
+        if not hasattr(self.ctx, 'descent_dist_approx'):
+            raise RuntimeError(
+                f'{type(self.ctx).__name__} does not support ground-distance '
+                'iteration (no descent_dist_approx attribute).'
+            )
+
+        def fly_once() -> Trajectory:
+            if self.options.iterate_mass:
+                return self._iterate_mass()
+            traj, _ = self._fly_iteration()
+            return traj
+
+        def actual_descent_distance(traj: Trajectory) -> float:
+            cruise_end_dist = (
+                self.ground_track.total_distance - self.descent_dist_approx
+            )
+            return float(traj.ground_distance[-1]) - cruise_end_dist
+
+        traj = fly_once()
+        for iteration in range(1, self.options.max_dist_iters + 1):
+            # Every flown trajectory is checked, including the last one
+            # allowed. With no descent to correct there is nothing to iterate.
+            actual = actual_descent_distance(traj)
+            residual = abs(actual - self.descent_dist_approx)
+            tolerance = self.options.dist_iter_reltol * self.descent_dist_approx
+            if self.descent_dist_approx <= 0 or residual < tolerance:
+                return traj
+            if iteration == self.options.max_dist_iters:
+                break
+            self.descent_dist_approx = actual
+            traj = fly_once()
+
+        raise RuntimeError(
+            "Ground-distance iteration failed to converge; final "
+            f"residual {residual:.2e} > {tolerance:.2e}"
+        )
 
     def _start_point(self, traj: Trajectory) -> Container:
         # Set initial values, taking initial position and azimuth from ground
