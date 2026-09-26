@@ -184,6 +184,31 @@ The adjustable builder preserves the legacy guardrails where possible:
   `ValueError`;
 - a negative descent distance raises a `ValueError`.
 
+### Descent distance from the performance model
+
+By default the descent distance, which decides where cruise ends, is the legacy
+rule of 18.228347 times the altitude drop. That rule assumes a fixed glide
+ratio, so an aircraft that descends differently lands short of the destination,
+or past it. With the sample performance model flights land 10 to 22 km short,
+more for a higher cruise altitude or a lower arrival airport. The error does not
+depend on the route length.
+
+Setting `descent_distance_from_model` in `AdjustableLegacyOptions` flies the
+descent on the performance model instead (in a standard atmosphere with no wind)
+and uses the distance it covers. An explicit `descent_distance` adjustment still
+takes precedence.
+
+```python
+builder = tb.AdjustableLegacyBuilder(
+    options=tb.Options(iterate_mass=False),
+    legacy_options=tb.AdjustableLegacyOptions(descent_distance_from_model=True),
+)
+```
+
+This removes the error that comes from the estimate. It does not correct for
+wind, which changes the ground distance covered in the descent, or for routes too
+short to contain a cruise segment.
+
 ```{eval-rst}
 .. automodule:: AEIC.trajectories.builders.adjustable_legacy
    :members:

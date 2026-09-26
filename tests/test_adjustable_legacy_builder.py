@@ -2,11 +2,16 @@ import numpy as np
 import pytest
 
 import AEIC.trajectories.builders as tb
+from AEIC.missions import Mission
+from AEIC.missions.mission import iso_to_timestamp
 from AEIC.performance.models.legacy import ROCDFilter
 from AEIC.performance.types import AircraftState, SimpleFlightRules
 from AEIC.trajectories import GroundTrack
-from AEIC.trajectories.builders.adjustable_legacy import AdjustableLegacyContext
-from AEIC.units import FL_TO_METERS
+from AEIC.trajectories.builders.adjustable_legacy import (
+    AdjustableLegacyContext,
+    flown_descent_distance,
+)
+from AEIC.units import FEET_TO_METERS, FL_TO_METERS
 
 
 def _ground_track(mission):
@@ -263,3 +268,102 @@ def test_adjustable_legacy_ground_distance_iter(sample_missions, performance_mod
     assert float(traj.ground_distance[-1]) == pytest.approx(
         _ground_track(mission).total_distance, abs=1.0
     )
+
+
+###########################################
+######   Descent distance from model  ######
+###########################################
+
+
+def _mission(origin, destination):
+    return Mission(
+        origin=origin,
+        destination=destination,
+        departure=iso_to_timestamp('2024-09-01T12:00:00'),
+        arrival=iso_to_timestamp('2024-09-01T18:00:00'),
+        aircraft_type='738',
+        load_factor=1.0,
+    )
+
+
+def _descent_end_altitude(mission):
+    """The default descent end: 3000 ft above the arrival airport."""
+    return mission.destination_position.altitude + 3000.0 * FEET_TO_METERS
+
+
+def _miss(traj, mission):
+    """Ground distance flown minus the route distance [m]."""
+    return float(traj.ground_distance[-1]) - _ground_track(mission).total_distance
+
+
+def test_flown_descent_distance_matches_the_descent_the_builder_flies(
+    performance_model,
+):
+    """The estimate must equal the descent that is actually flown, or the two
+    would drift apart the next time the level-change loop changes. Read the
+    flown descent off a real flight: it runs from the last point at the peak
+    altitude to the end."""
+    mission = _mission('BOS', 'LAX')
+    traj = tb.AdjustableLegacyBuilder(options=tb.Options(iterate_mass=False)).fly(
+        performance_model, mission
+    )
+
+    altitude = np.asarray(traj.altitude)
+    ground_distance = np.asarray(traj.ground_distance)
+    top_of_descent = np.where(altitude >= altitude.max() - 1e-6)[0][-1]
+    flown = ground_distance[-1] - ground_distance[top_of_descent]
+
+    assert flown_descent_distance(
+        performance_model,
+        altitude.max(),
+        _descent_end_altitude(mission),
+        tb.LegacyOptions().altitude_step,
+    ) == pytest.approx(flown, rel=1e-9)
+
+
+def test_there_is_no_descent_distance_when_there_is_nothing_to_descend(
+    performance_model,
+):
+    assert flown_descent_distance(performance_model, 3000.0, 3000.0, 304.8) == 0.0
+
+
+@pytest.mark.parametrize('destination', ['LAX', 'DEN'])
+@pytest.mark.parametrize('flight_level', [200, 340])
+def test_estimating_the_descent_from_the_model_lands_flights_on_the_destination(
+    performance_model, destination, flight_level
+):
+    """The static rule (18.228347 times the altitude drop) assumes a glide ratio
+    the performance model does not have, so with it flights land 10 to 22 km
+    short of the destination, more for a higher cruise altitude or a lower
+    airport. Flying the descent on the model itself removes the error, since
+    there is no wind here and the descent does not depend on the route."""
+    mission = _mission('BOS', destination)
+    cruise_altitude = flight_level * 100 * FEET_TO_METERS
+
+    def fly(**legacy_options):
+        return tb.AdjustableLegacyBuilder(
+            options=tb.Options(iterate_mass=False),
+            legacy_options=tb.AdjustableLegacyOptions(**legacy_options),
+        ).fly(performance_model, mission, cruise_altitude=cruise_altitude)
+
+    assert abs(_miss(fly(), mission)) > 1000.0
+    assert _miss(fly(descent_distance_from_model=True), mission) == pytest.approx(
+        0.0, abs=1.0
+    )
+
+
+def test_an_explicit_descent_distance_wins_over_the_model_estimate(
+    sample_missions, performance_model
+):
+    mission = sample_missions[0]
+    options = tb.Options(iterate_mass=False)
+
+    explicit = tb.AdjustableLegacyBuilder(options=options).fly(
+        performance_model, mission, descent_distance=120_000.0
+    )
+    with_option = tb.AdjustableLegacyBuilder(
+        options=options,
+        legacy_options=tb.AdjustableLegacyOptions(descent_distance_from_model=True),
+    ).fly(performance_model, mission, descent_distance=120_000.0)
+
+    assert with_option.approx_eq(explicit)
