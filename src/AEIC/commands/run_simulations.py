@@ -22,6 +22,41 @@ from AEIC.utils.progress import Progress
 logger = logging.getLogger(__name__)
 
 
+def make_trajectory_builder(
+    builder: str = 'legacy',
+    iterate_mass: bool = False,
+    use_weather: bool = False,
+    descent_distance_from_model: bool = False,
+) -> tb.Builder:
+    """Make the trajectory builder for a run.
+
+    `legacy` is `LegacyBuilder`, which reproduces the legacy code and only flies
+    the legacy (BADA-derived) performance models. `adjustable` is
+    `AdjustableLegacyBuilder`, which reproduces it by default but also flies
+    other model types, and supports `descent_distance_from_model`. Asking for
+    that option with the legacy builder is an error, not something to ignore.
+    """
+    options = tb.Options(iterate_mass=iterate_mass, use_weather=use_weather)
+    match builder:
+        case 'legacy':
+            if descent_distance_from_model:
+                raise ValueError(
+                    'Estimating the descent distance from the performance model '
+                    'needs --builder adjustable: LegacyBuilder reproduces the '
+                    'legacy code and does not support it.'
+                )
+            return tb.LegacyBuilder(options=options)
+        case 'adjustable':
+            return tb.AdjustableLegacyBuilder(
+                options=options,
+                legacy_options=tb.AdjustableLegacyOptions(
+                    descent_distance_from_model=descent_distance_from_model
+                ),
+            )
+        case _:
+            raise ValueError(f'Unknown trajectory builder: {builder!r}')
+
+
 def simulate_slice(
     slice_idx: int,
     sample: float | None,
@@ -151,6 +186,28 @@ def simulate_slice(
     default=0,
     help='Index of the slice to process (0-based).',
 )
+@click.option(
+    '--builder',
+    'builder_name',
+    type=click.Choice(['legacy', 'adjustable']),
+    default='legacy',
+    show_default=True,
+    help='Trajectory builder. The legacy builder only flies legacy performance '
+    'models; the adjustable one also flies others, such as PIANO models.',
+)
+@click.option(
+    '--iterate-mass/--no-iterate-mass',
+    default=False,
+    show_default=True,
+    help='Iterate the starting mass until the fuel burned matches the fuel loaded.',
+)
+@click.option(
+    '--descent-distance-from-model',
+    is_flag=True,
+    help='Estimate the descent distance by flying the descent on the performance '
+    'model, instead of the legacy static rule that makes flights land short of '
+    'the destination. Needs --builder adjustable.',
+)
 def run_simulations(
     config_file: Path,
     performance_selector_dir: Path | None,
@@ -161,6 +218,9 @@ def run_simulations(
     seed: int | None,
     slice_count: int,
     slice_index: int,
+    builder_name: str,
+    iterate_mass: bool,
+    descent_distance_from_model: bool,
 ):
     if performance_selector_dir is None == performance_model_file is None:
         raise click.UsageError(
@@ -215,12 +275,15 @@ def run_simulations(
             fuel = Fuel.model_validate(tomllib.load(fp))
 
         # Make trajectory builder.
-        builder = tb.LegacyBuilder(
-            options=tb.Options(
-                iterate_mass=False,
+        try:
+            builder = make_trajectory_builder(
+                builder_name,
+                iterate_mass=iterate_mass,
                 use_weather=config.weather.use_weather,
+                descent_distance_from_model=descent_distance_from_model,
             )
-        )
+        except ValueError as exc:
+            raise click.UsageError(str(exc)) from exc
 
         simulate_slice(
             slice_index,

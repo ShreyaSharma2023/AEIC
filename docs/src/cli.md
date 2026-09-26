@@ -43,6 +43,9 @@ gridding.
 | `--seed` | Integer | No | | Random seed used when sampling missions. |
 | `--slice-count` | Integer | No | `1` | Total number of parallel slices. |
 | `--slice-index` | Integer | No | `0` | Zero-based index of the slice to process. |
+| `--builder` | `legacy` or `adjustable` | No | `legacy` | Trajectory builder. The legacy builder reproduces the legacy code and only flies legacy (BADA-derived) performance models. The adjustable builder also flies others, such as PIANO models. |
+| `--iterate-mass` / `--no-iterate-mass` | Flag | No | `--no-iterate-mass` | Iterate the starting mass until the fuel burned matches the fuel loaded. |
+| `--descent-distance-from-model` | Flag | No | Off | Estimate the descent distance by flying the descent on the performance model, instead of the legacy static rule that makes flights land short of the destination. Needs `--builder adjustable`. |
 
 ```{note}
 Exactly one of `--performance-selector-dir` or `--performance-model-file` must
