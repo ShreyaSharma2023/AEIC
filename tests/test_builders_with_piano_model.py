@@ -12,8 +12,11 @@ import numpy as np
 import pytest
 
 import AEIC.trajectories.builders as tb
+from AEIC.missions import Mission
+from AEIC.missions.mission import iso_to_timestamp
 from AEIC.performance.model_builder import build_piano_model
 from AEIC.performance.types import SpeedData
+from AEIC.trajectories import GroundTrack
 
 
 @pytest.fixture
@@ -45,3 +48,35 @@ def test_a_piano_model_can_be_flown(iterate_mass, piano_model, sample_missions):
     assert np.all(np.isfinite(traj.fuel_flow))
     # Fuel is only ever burned, so the aircraft never gets heavier.
     assert np.all(np.diff(traj.aircraft_mass) <= 1e-9)
+
+
+@pytest.mark.parametrize(
+    'iterate_mass', [False, True], ids=['no_mass_iter', 'mass_iter']
+)
+def test_estimating_the_descent_from_the_model_lands_a_piano_flight_on_the_destination(
+    iterate_mass, piano_model
+):
+    """A PIANO descent is tabulated by mass as well as altitude, unlike the
+    legacy tables, and is evaluated here at the lightest mass. This checks the
+    estimate still works through that path. The static rule's error for this
+    dummy table (it is arbitrary) is not asserted."""
+    mission = Mission(
+        origin='BOS',
+        destination='LAX',
+        departure=iso_to_timestamp('2024-09-01T12:00:00'),
+        arrival=iso_to_timestamp('2024-09-01T18:00:00'),
+        aircraft_type='738',
+        load_factor=1.0,
+    )
+    route = GroundTrack.great_circle(
+        mission.origin_position.location,
+        mission.destination_position.location,
+        allow_overstep=True,
+    ).total_distance
+
+    traj = tb.AdjustableLegacyBuilder(
+        options=tb.Options(iterate_mass=iterate_mass),
+        legacy_options=tb.AdjustableLegacyOptions(descent_distance_from_model=True),
+    ).fly(piano_model, mission)
+
+    assert float(traj.ground_distance[-1]) == pytest.approx(route, abs=1.0)
