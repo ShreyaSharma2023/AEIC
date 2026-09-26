@@ -24,6 +24,34 @@ from .base import Builder, Context, Options
 from .legacy import LegacyOptions
 
 
+def level_change_altitudes(
+    start_altitude: float,
+    final_altitude: float,
+    altitude_step: float,
+    climbing: bool,
+) -> np.ndarray:
+    """Altitudes [m] at the ends of the constant-altitude steps of a climb or
+    descent from `start_altitude` to `final_altitude`.
+
+    The phase is discretized into steps of `altitude_step`, with a possible
+    extra short step at the end to reach the target altitude. The result is
+    empty if there is nothing to fly."""
+    altitudes = np.arange(
+        start_altitude, final_altitude, altitude_step if climbing else -altitude_step
+    )
+    if len(altitudes) == 0:
+        return altitudes
+    # Snap floating-point step accumulation to the exact endpoint to avoid a
+    # near-zero extra segment.
+    if np.isclose(altitudes[-1], final_altitude, rtol=0.0, atol=1e-9):
+        altitudes[-1] = final_altitude
+    elif (climbing and altitudes[-1] < final_altitude) or (
+        not climbing and altitudes[-1] > final_altitude
+    ):
+        altitudes = np.append(altitudes, final_altitude)
+    return altitudes
+
+
 class AdjustableLegacyContext(Context):
     """Context for adjustable legacy trajectory builder."""
 
@@ -410,25 +438,14 @@ class AdjustableLegacyBuilder(Builder):
         else:
             pt = traj.make_point(-1)
 
-        # Flight phase is discretized into constant altitude steps with a
-        # possible extra "short step" at the end to reach the target altitude.
-        altitudes = np.arange(
+        altitudes = level_change_altitudes(
             pt.altitude,
             final_altitude,
-            self.altitude_step
-            if flight_phase == FlightPhase.CLIMB
-            else -self.altitude_step,
+            self.altitude_step,
+            climbing=flight_phase == FlightPhase.CLIMB,
         )
         if len(altitudes) == 0:
             return
-        # Snap floating-point step accumulation to the exact endpoint
-        # to avoid a near-zero extra segment.
-        if np.isclose(altitudes[-1], final_altitude, rtol=0.0, atol=1e-9):
-            altitudes[-1] = final_altitude
-        elif (flight_phase == FlightPhase.CLIMB and altitudes[-1] < final_altitude) or (
-            flight_phase == FlightPhase.DESCENT and altitudes[-1] > final_altitude
-        ):
-            altitudes = np.append(altitudes, final_altitude)
 
         # Loop over altitude change segments.
         for start_altitude, end_altitude in zip(altitudes[:-1], altitudes[1:]):
