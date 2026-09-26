@@ -4,11 +4,13 @@ import numpy as np
 
 from AEIC.config import config
 from AEIC.missions import Mission
-from AEIC.performance.models import BasePerformanceModel
+from AEIC.performance.models import LegacyPerformanceModel
+from AEIC.performance.models.legacy import ROCDFilter
 from AEIC.performance.types import AircraftState, SimpleFlightRules
 from AEIC.storage import FlightPhase
 from AEIC.units import (
     FEET_TO_METERS,
+    FL_TO_METERS,
     METERS_TO_FL,
     MINUTES_TO_SECONDS,
     NAUTICAL_MILES_TO_METERS,
@@ -39,7 +41,7 @@ class LegacyContext(Context):
     def __init__(
         self,
         builder: 'LegacyBuilder',
-        ac_performance: BasePerformanceModel,
+        ac_performance: LegacyPerformanceModel,
         mission: Mission,
         starting_mass: float | None,
     ):
@@ -176,7 +178,10 @@ class LegacyBuilder(Builder):
             SimpleFlightRules.CRUISE,
         )
 
-        lowest_cruise_altitude = self.ac_performance.lowest_cruise_altitude
+        lowest_cruise_altitude = (
+            min(self.ac_performance.performance_table(ROCDFilter.ZERO).fl)
+            * FL_TO_METERS
+        )
 
         perf_low = self.ac_performance.evaluate(
             AircraftState(
