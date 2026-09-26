@@ -80,3 +80,17 @@ def test_estimating_the_descent_from_the_model_lands_a_piano_flight_on_the_desti
     ).fly(piano_model, mission)
 
     assert float(traj.ground_distance[-1]) == pytest.approx(route, abs=1.0)
+
+
+def test_the_legacy_builder_rejects_a_piano_model_with_a_clear_error(
+    piano_model, sample_missions
+):
+    """`LegacyBuilder` is for the BADA-derived legacy models only. Handing it
+    anything else used to fail with an AttributeError about a missing
+    `performance_table`, which says nothing about what to do."""
+    with pytest.raises(
+        TypeError, match=r'PianoPerformanceModel.*AdjustableLegacyBuilder'
+    ):
+        tb.LegacyBuilder(options=tb.Options(iterate_mass=False)).fly(
+            piano_model, sample_missions[0]
+        )

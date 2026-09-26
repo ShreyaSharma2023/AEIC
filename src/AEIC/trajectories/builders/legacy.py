@@ -45,6 +45,13 @@ class LegacyContext(Context):
         mission: Mission,
         starting_mass: float | None,
     ):
+        if not isinstance(ac_performance, LegacyPerformanceModel):
+            raise TypeError(
+                'LegacyBuilder only supports legacy (BADA-derived) performance '
+                f'models, not {type(ac_performance).__name__}; use '
+                'AdjustableLegacyBuilder to fly other model types.'
+            )
+
         # The context constructor calculates all of the fixed information used
         # throughout the simulation by the trajectory builder.
 
