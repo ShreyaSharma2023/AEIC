@@ -1,4 +1,7 @@
-"""Flying a `PianoPerformanceModel` through the trajectory builders.
+"""Flying a `PianoPerformanceModel` through `AdjustableLegacyBuilder`.
+
+`LegacyBuilder` is for the BADA-derived legacy models only; the adjustable
+builder is the one that flies other model types.
 
 The fixtures in `tests/data/performance/piano` are dummy data, so these tests
 assert that a flight can be built and is internally consistent, never that its
@@ -11,8 +14,6 @@ import pytest
 import AEIC.trajectories.builders as tb
 from AEIC.performance.model_builder import build_piano_model
 from AEIC.performance.types import SpeedData
-
-BUILDERS = [tb.LegacyBuilder, tb.AdjustableLegacyBuilder]
 
 
 @pytest.fixture
@@ -28,10 +29,14 @@ def piano_model(piano_data, lto):
     )
 
 
-@pytest.mark.parametrize('builder_class', BUILDERS, ids=lambda c: c.__name__)
-def test_a_piano_model_can_be_flown(builder_class, piano_model, sample_missions):
-    # Default options, as used by `aeic run`, including mass iteration.
-    traj = builder_class(options=tb.Options()).fly(piano_model, sample_missions[0])
+# `aeic run` builds its trajectories without mass iteration; it is on by default.
+@pytest.mark.parametrize(
+    'iterate_mass', [False, True], ids=['no_mass_iter', 'mass_iter']
+)
+def test_a_piano_model_can_be_flown(iterate_mass, piano_model, sample_missions):
+    builder = tb.AdjustableLegacyBuilder(options=tb.Options(iterate_mass=iterate_mass))
+
+    traj = builder.fly(piano_model, sample_missions[0])
 
     assert traj.n_climb > 0
     assert traj.n_cruise > 0
@@ -40,19 +45,3 @@ def test_a_piano_model_can_be_flown(builder_class, piano_model, sample_missions)
     assert np.all(np.isfinite(traj.fuel_flow))
     # Fuel is only ever burned, so the aircraft never gets heavier.
     assert np.all(np.diff(traj.aircraft_mass) <= 1e-9)
-
-
-def test_the_two_builders_agree_on_a_piano_model_without_adjustments(
-    piano_model, sample_missions
-):
-    """Without adjustments `AdjustableLegacyBuilder` must reproduce
-    `LegacyBuilder`, as it does for a legacy model."""
-    mission = sample_missions[0]
-    legacy = tb.LegacyBuilder(options=tb.Options()).fly(piano_model, mission)
-    adjustable = tb.AdjustableLegacyBuilder(options=tb.Options()).fly(
-        piano_model, mission
-    )
-
-    assert adjustable.approx_eq(legacy)
-    assert adjustable.starting_mass == pytest.approx(legacy.starting_mass)
-    assert adjustable.total_fuel_mass == pytest.approx(legacy.total_fuel_mass)
