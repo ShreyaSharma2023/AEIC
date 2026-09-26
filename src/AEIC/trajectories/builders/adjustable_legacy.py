@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Literal, Protocol
 
 import numpy as np
 
@@ -50,6 +51,54 @@ def level_change_altitudes(
     ):
         altitudes = np.append(altitudes, final_altitude)
     return altitudes
+
+
+@dataclass
+class AdjustableLegacyOptions(LegacyOptions):
+    """Additional options for the adjustable legacy trajectory builder."""
+
+    descent_distance_from_model: bool = False
+    """Estimate the descent distance, which decides where cruise ends, by
+    flying the descent on the performance model, instead of by the static rule
+    of 18.228347 times the altitude drop. The static rule assumes a glide ratio
+    that a given aircraft does not have, so without this flights land short of
+    (or past) the destination by an amount that depends on the aircraft, the
+    cruise altitude and the arrival airport. An explicit `descent_distance`
+    adjustment takes precedence."""
+
+
+def flown_descent_distance(
+    performance: BasePerformanceModel,
+    start_altitude: float,
+    end_altitude: float,
+    altitude_step: float,
+    aircraft_mass: float | Literal['min', 'max'] = 'min',
+) -> float:
+    """Ground distance [m] covered by descending from `start_altitude` to
+    `end_altitude` on the given performance model, with no wind.
+
+    Mirrors the descent that `AdjustableLegacyBuilder` flies: constant-altitude
+    steps, performance evaluated at the start of each, and a step taking
+    `altitude change / rate of descent` seconds at the horizontal speed. The
+    descent is evaluated at one mass, by default the lightest the model
+    tabulates, which is the landing end of the range. It only matters for models
+    whose descent depends on mass, since the legacy BADA-derived tables tabulate
+    a single mass."""
+    altitudes = level_change_altitudes(
+        start_altitude, end_altitude, altitude_step, climbing=False
+    )
+
+    distance = 0.0
+    for altitude, next_altitude in zip(altitudes[:-1], altitudes[1:]):
+        perf = performance.evaluate(
+            AircraftState(altitude=altitude, aircraft_mass=aircraft_mass),
+            SimpleFlightRules.DESCEND,
+        )
+        horizontal_airspeed = np.sqrt(perf.true_airspeed**2 - perf.rate_of_climb**2)
+        distance += (
+            horizontal_airspeed * (next_altitude - altitude) / perf.rate_of_climb
+        )
+    return float(distance)
 
 
 class AdjustableLegacyContext(Context):
@@ -208,13 +257,20 @@ class AdjustableLegacyContext(Context):
             raise ValueError(
                 "Arrival airport + 3000ft should not be higher than end of cruise point"
             )
-        if descent_distance is None:
-            self.descent_dist_approx = 18.228347 * (
-                self.des_start_altitude - self.des_end_altitude
-            )
-        else:
+        if descent_distance is not None:
             self.descent_dist_approx = self.apply_adjustment(
                 descent_distance, mission, ac_performance
+            )
+        elif builder.descent_distance_from_model:
+            self.descent_dist_approx = flown_descent_distance(
+                ac_performance,
+                self.des_start_altitude,
+                self.des_end_altitude,
+                builder.altitude_step,
+            )
+        else:
+            self.descent_dist_approx = 18.228347 * (
+                self.des_start_altitude - self.des_end_altitude
             )
         if self.descent_dist_approx < 0:
             raise ValueError('Descent distance must be non-negative')
@@ -287,6 +343,11 @@ class AdjustableLegacyBuilder(Builder):
         self.cruise_step = legacy_options.cruise_step
 
         self.fuel_LHV = legacy_options.fuel_LHV
+
+        # Only AdjustableLegacyOptions has this; a plain LegacyOptions is fine.
+        self.descent_distance_from_model = getattr(
+            legacy_options, 'descent_distance_from_model', False
+        )
 
     def calc_starting_mass(self) -> float:
         """Calculates the starting mass using AEIC v2 methods.
