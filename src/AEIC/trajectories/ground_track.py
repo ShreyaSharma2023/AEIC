@@ -103,6 +103,11 @@ class GroundTrack:
     def location(self, distance: float) -> GroundTrack.Point:
         """Calculate location at a given distance from start of ground track."""
 
+        # Beyond the end of the track: like `step`, continue along the final
+        # great circle path if overstepping is allowed, rather than raising.
+        if distance > self.index[-1] and self.allow_overstep:
+            return self._overstep(distance)
+
         # Find waypoints to interpolate between. This throws an exception if
         # the distance is out of range, so we don't need to check for any index
         # out of bounds conditions below.
