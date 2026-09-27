@@ -1,0 +1,10 @@
+"Test fixture with OEW."
+
+; File created as test
+
+; Parameter Name               Value          ;Comments
+
+ mto-mass                      63049.288      ;kilograms    (139000.0 pounds)
+ design-cruise-mach            0.82
+ *freeze-oew*                       35402.8556
+ plane-version                      5.4
