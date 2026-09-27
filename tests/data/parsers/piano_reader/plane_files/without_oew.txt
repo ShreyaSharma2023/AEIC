@@ -1,0 +1,9 @@
+"Test fixture without OEW, like the 39 real preliminary-concept plane files."
+
+; File created as test
+
+; Parameter Name               Value          ;Comments
+
+ mto-mass                      540000.0       ;kilograms    (1190497.2 pounds)
+ design-cruise-mach            0.82
+ plane-version                      5.4

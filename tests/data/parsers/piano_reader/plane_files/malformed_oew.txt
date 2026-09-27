@@ -1,0 +1,9 @@
+"Test fixture with a malformed OEW value."
+
+; File created as test
+
+; Parameter Name               Value          ;Comments
+
+ mto-mass                      63049.288      ;kilograms    (139000.0 pounds)
+ *freeze-oew*                       N/A
+ plane-version                      5.4
