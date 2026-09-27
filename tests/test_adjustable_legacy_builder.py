@@ -10,6 +10,7 @@ from AEIC.trajectories import GroundTrack
 from AEIC.trajectories.builders.adjustable_legacy import (
     AdjustableLegacyContext,
     flown_descent_distance,
+    no_cruise_apex_altitude,
 )
 from AEIC.units import FEET_TO_METERS, FL_TO_METERS
 
@@ -367,3 +368,63 @@ def test_an_explicit_descent_distance_wins_over_the_model_estimate(
     ).fly(performance_model, mission, descent_distance=120_000.0)
 
     assert with_option.approx_eq(explicit)
+
+
+###########################################
+######   No-cruise apex for short routes  ######
+###########################################
+
+# A route too short to reach the normal cruise altitude and still leave room
+# for any cruise: BOS-PVD and JFK-PHL both overshoot the destination by
+# 50-130 km if flown to the normal cruise altitude, since the climb and
+# descent alone cover more than the route.
+
+
+@pytest.mark.parametrize('destination', ['PVD', 'BDL'])
+def test_a_route_too_short_for_cruise_lands_on_the_destination(
+    performance_model, destination
+):
+    """Without an apex, these routes overshoot the destination because the
+    climb to the normal cruise altitude plus the descent back down already
+    cover more distance than the route. The fix finds the altitude at which
+    the climb meets a descent shifted back to end at the destination, ends
+    the climb there, and descends immediately - no cruise segment."""
+    mission = _mission('BOS', destination)
+
+    traj = tb.AdjustableLegacyBuilder(options=tb.Options(iterate_mass=False)).fly(
+        performance_model, mission
+    )
+
+    assert _miss(traj, mission) == pytest.approx(0.0, abs=1.0)
+    assert traj.n_cruise <= 1
+
+
+def test_a_route_too_short_for_cruise_still_lands_with_mass_iteration(
+    performance_model,
+):
+    """Mass iteration changes the starting mass by well under 1% on routes
+    this short, which barely moves the apex, so it must not break landing on
+    the destination."""
+    mission = _mission('BOS', 'PVD')
+
+    traj = tb.AdjustableLegacyBuilder(options=tb.Options(iterate_mass=True)).fly(
+        performance_model, mission
+    )
+
+    assert _miss(traj, mission) == pytest.approx(0.0, abs=100.0)
+
+
+def test_no_cruise_apex_altitude_raises_when_even_a_bare_climb_and_descent_do_not_fit(
+    performance_model,
+):
+    """A route shorter than the distance needed to climb to the (normal)
+    climb-start altitude and immediately descend from it has no altitude that
+    works; this must fail loudly rather than silently fly some other route."""
+    with pytest.raises(ValueError, match='too short'):
+        no_cruise_apex_altitude(
+            performance_model,
+            route_distance=1.0,
+            climb_start_altitude=3000.0 * FEET_TO_METERS,
+            descent_end_altitude=0.0,
+            altitude_step=tb.LegacyOptions().altitude_step,
+        )
