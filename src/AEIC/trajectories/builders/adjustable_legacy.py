@@ -101,6 +101,82 @@ def flown_descent_distance(
     return float(distance)
 
 
+def flown_climb_distance(
+    performance: BasePerformanceModel,
+    start_altitude: float,
+    end_altitude: float,
+    altitude_step: float,
+    aircraft_mass: float | Literal['min', 'max'] = 'max',
+) -> float:
+    """Ground distance [m] covered by climbing from `start_altitude` to
+    `end_altitude` on the given performance model, with no wind.
+
+    Mirrors `flown_descent_distance`, for the climb. Evaluated at one mass, by
+    default the heaviest the model tabulates, matching the aircraft's actual
+    mass at the start of a climb."""
+    altitudes = level_change_altitudes(
+        start_altitude, end_altitude, altitude_step, climbing=True
+    )
+
+    distance = 0.0
+    for altitude, next_altitude in zip(altitudes[:-1], altitudes[1:]):
+        perf = performance.evaluate(
+            AircraftState(altitude=altitude, aircraft_mass=aircraft_mass),
+            SimpleFlightRules.CLIMB,
+        )
+        horizontal_airspeed = np.sqrt(perf.true_airspeed**2 - perf.rate_of_climb**2)
+        distance += (
+            horizontal_airspeed * (next_altitude - altitude) / perf.rate_of_climb
+        )
+    return float(distance)
+
+
+def no_cruise_apex_altitude(
+    performance: BasePerformanceModel,
+    route_distance: float,
+    climb_start_altitude: float,
+    descent_end_altitude: float,
+    altitude_step: float,
+) -> float:
+    """The altitude at which a climb from `climb_start_altitude` and a descent
+    to `descent_end_altitude`, flown back to back with no cruise in between,
+    together cover exactly `route_distance` [m] - the "apex" of a route too
+    short to reach the normal cruise altitude and still leave room to cruise.
+
+    The distance to climb to a given altitude increases with altitude, and
+    the distance to descend from a given altitude to touchdown also increases
+    with altitude, so their sum is monotonically increasing in altitude and
+    has exactly one altitude at which it equals `route_distance`; found here
+    by bisection. Raises `ValueError` if the route is shorter than the
+    distance needed to climb to `climb_start_altitude` and immediately
+    descend from there - the shortest climb-and-descent this can fly."""
+
+    def total_distance(altitude: float) -> float:
+        return flown_climb_distance(
+            performance, climb_start_altitude, altitude, altitude_step
+        ) + flown_descent_distance(
+            performance, altitude, descent_end_altitude, altitude_step
+        )
+
+    shortest_distance = total_distance(climb_start_altitude)
+    if route_distance < shortest_distance:
+        raise ValueError(
+            f'Route is too short to fly: {route_distance:.0f} m is less than '
+            f'the {shortest_distance:.0f} m needed to climb to '
+            f'{climb_start_altitude:.0f} m and descend from there to '
+            f'{descent_end_altitude:.0f} m.'
+        )
+
+    lo, hi = climb_start_altitude, performance.maximum_altitude
+    for _ in range(50):
+        mid = 0.5 * (lo + hi)
+        if total_distance(mid) < route_distance:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
 class AdjustableLegacyContext(Context):
     """Context for adjustable legacy trajectory builder."""
 
@@ -274,6 +350,35 @@ class AdjustableLegacyContext(Context):
             )
         if self.descent_dist_approx < 0:
             raise ValueError('Descent distance must be non-negative')
+
+        # A route too short to reach the normal cruise altitude and still
+        # leave room for any cruise would overshoot the destination: the
+        # climb to cruise altitude plus the descent back down already cover
+        # more distance than the route. Only kicks in for the default cruise
+        # altitude and descent distance; an explicit adjustment for either is
+        # left alone.
+        if cruise_altitude is None and descent_distance is None:
+            climb_distance = flown_climb_distance(
+                ac_performance,
+                self.clm_start_altitude,
+                self.crz_start_altitude,
+                builder.altitude_step,
+            )
+            if climb_distance + self.descent_dist_approx > ground_track.total_distance:
+                self.crz_start_altitude = no_cruise_apex_altitude(
+                    ac_performance,
+                    ground_track.total_distance,
+                    self.clm_start_altitude,
+                    self.des_end_altitude,
+                    builder.altitude_step,
+                )
+                self.des_start_altitude = self.crz_start_altitude
+                self.descent_dist_approx = flown_descent_distance(
+                    ac_performance,
+                    self.crz_start_altitude,
+                    self.des_end_altitude,
+                    builder.altitude_step,
+                )
 
         # Initialize weather regridding when requested.
         self.weather: Weather | None = None
