@@ -83,6 +83,17 @@ def test_airport_handling(tmp_path):
         assert cur.fetchone() is None
 
 
+def test_flights_table_has_a_performance_model_key_column(tmp_path):
+    """`performance_model_key` is filled in downstream (by the aircraft
+    performance parser, matching flights to a PIANO TOML key), not by AEIC
+    itself, so this only checks the column exists for that later write."""
+    with WritableDatabase(tmp_path / 'test_schema.sqlite') as db:
+        cur = db._conn.cursor()
+        cur.execute('PRAGMA table_info(flights)')
+        columns = {row[1] for row in cur.fetchall()}
+        assert 'performance_model_key' in columns
+
+
 def test_oag_conversion(tmp_path, test_data_dir):
     # This extract of the 2019 OAG data contains 8 valid flights (see
     # tests/data/oag/README.md for provenance and expected filtering).

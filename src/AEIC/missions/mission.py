@@ -67,6 +67,14 @@ class Mission:
     flight_id: int | None = None
     """Unique flight ID from mission database (if available)."""
 
+    performance_model_key: str | None = None
+    """Key identifying the specific performance model TOML file to use for
+    this flight, matched against a TOML filename or a synonym in a
+    `SimplePerformanceModelSelector`'s `config.toml`. Set by preprocessing
+    outside AEIC (matching aircraft type, engine and other details to a
+    performance model); falls back to `aircraft_type` in the selector when
+    None."""
+
     @staticmethod
     def _airport_position(code: str) -> Position:
         ap = airport(code)
