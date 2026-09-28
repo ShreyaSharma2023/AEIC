@@ -78,3 +78,4 @@ id,ident,type,name,latitude_deg,longitude_deg,elevation_ft,continent,iso_country
 9990242,CYKZ,closed,Buttonville Municipal Airport,43.862221,-79.370001,650,NA,CA,CA-ON,Markham / Toronto,no,CYKZ,YKZ,,,https://en.wikipedia.org/wiki/Buttonville_Municipal_Airport,closed 2023
 9990243,FMCN,small_airport,Iconi Airport,-11.7108,43.2439,33,AF,KM,KM-G,Moroni,no,FMCN,YVA,,,,
 9990244,ZLLL,large_airport,Lanzhou Zhongchuan International Airport,36.5152,103.62,6388,AS,CN,CN-62,Lanzhou,yes,ZLLL,ZGC,,,https://en.wikipedia.org/wiki/Lanzhou_Zhongchuan_International_Airport,historic IATA ZGC; current IATA LHW
+9990245,KPBI,large_airport,Palm Beach International Airport,26.683201,-80.095596,19,NA,US,US-FL,West Palm Beach,yes,KPBI,PBI,,,https://en.wikipedia.org/wiki/Palm_Beach_International_Airport,historic IATA PBI; current IATA DJT (President Donald J. Trump International Airport); still used in 2025 OAG schedules
