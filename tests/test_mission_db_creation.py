@@ -1,10 +1,11 @@
 import csv
+from datetime import date
 
 import pytest
 
 import AEIC.utils.airports as airports
 from AEIC.missions import Database
-from AEIC.missions.oag import convert_oag_data
+from AEIC.missions.oag import CSVEntry, convert_oag_data
 from AEIC.missions.writable_database import Warning, WritableDatabase
 from AEIC.types import DayOfWeek
 
@@ -201,6 +202,45 @@ def test_oag_conversion(tmp_path, test_data_dir):
     # that started emitting spurious warnings on valid rows would fail here.
     assert not warnings_path.exists()
     assert Warning.Type  # exercise the import so a future refactor catches the rename
+
+
+def test_csv_entry_parses_float_formatted_integer_columns():
+    """Some OAG exports (observed on the real 2025 extract, after
+    `aeicperf filter-oag`'s own CSV round-trip) write integer-valued columns
+    as float-formatted strings, e.g. stops='0.0' instead of '0' - a plain
+    `int()` call raises `ValueError` on those. `from_csv_row` must still
+    parse the row, not silently drop it."""
+    row = {
+        'carrier': 'AS',
+        'fltno': '1011',
+        'depapt': 'ORD',
+        'depctry': 'US',
+        'arrapt': 'SEA',
+        'arrctry': 'US',
+        'deptim': '0805',
+        'arrtim': '1053',
+        'arrday': '',
+        'days': '  34',
+        'stops': '0.0',
+        'genacft': '320',
+        'inpacft': '320',
+        'service': 'J',
+        'seats': '146.0',
+        'efffrom': '20191205.0',
+        'effto': '20191211.0',
+        'distance': '1715.0',
+        'operating': '',
+        'longest': 'L',
+    }
+
+    entry = CSVEntry.from_csv_row(row)
+
+    assert entry is not None
+    assert entry.stops == 0
+    assert entry.seats == 146
+    assert entry.distance == 1715
+    assert entry.efffrom == date(2019, 12, 5)
+    assert entry.effto == date(2019, 12, 11)
 
 
 def test_oag_warning_categories(tmp_path):
