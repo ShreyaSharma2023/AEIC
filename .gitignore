@@ -196,3 +196,6 @@ src/AEIC/data/airports/*.csv
 
 # Merged AEIC trajectory stores
 *.aeic-store
+
+# Real weather data (staged locally per-cluster, not committed).
+src/AEIC/data/weather/*.nc

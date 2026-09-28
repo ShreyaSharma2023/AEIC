@@ -35,6 +35,13 @@ def test_mass_iteration_and_weather_reach_the_builder_options(builder_name):
     assert builder.options.use_weather is True
 
 
+@pytest.mark.parametrize('builder_name', ['legacy', 'adjustable'])
+def test_ground_distance_iteration_reaches_the_builder_options(builder_name):
+    builder = make_trajectory_builder(builder_name, iterate_ground_distance=True)
+
+    assert builder.options.iterate_ground_distance is True
+
+
 def test_estimating_the_descent_from_the_model_reaches_the_adjustable_builder():
     builder = make_trajectory_builder('adjustable', descent_distance_from_model=True)
 
