@@ -27,6 +27,7 @@ def make_trajectory_builder(
     iterate_mass: bool = False,
     use_weather: bool = False,
     descent_distance_from_model: bool = False,
+    iterate_ground_distance: bool = False,
 ) -> tb.Builder:
     """Make the trajectory builder for a run.
 
@@ -36,7 +37,11 @@ def make_trajectory_builder(
     other model types, and supports `descent_distance_from_model`. Asking for
     that option with the legacy builder is an error, not something to ignore.
     """
-    options = tb.Options(iterate_mass=iterate_mass, use_weather=use_weather)
+    options = tb.Options(
+        iterate_mass=iterate_mass,
+        use_weather=use_weather,
+        iterate_ground_distance=iterate_ground_distance,
+    )
     match builder:
         case 'legacy':
             if descent_distance_from_model:
@@ -208,6 +213,12 @@ def simulate_slice(
     'model, instead of the legacy static rule that makes flights land short of '
     'the destination. Needs --builder adjustable.',
 )
+@click.option(
+    '--iterate-ground-distance',
+    is_flag=True,
+    help='Iterate the descent-distance estimate that decides where cruise ends '
+    'until it matches the ground distance actually flown during descent.',
+)
 def run_simulations(
     config_file: Path,
     performance_selector_dir: Path | None,
@@ -221,6 +232,7 @@ def run_simulations(
     builder_name: str,
     iterate_mass: bool,
     descent_distance_from_model: bool,
+    iterate_ground_distance: bool,
 ):
     if performance_selector_dir is None == performance_model_file is None:
         raise click.UsageError(
@@ -281,6 +293,7 @@ def run_simulations(
                 iterate_mass=iterate_mass,
                 use_weather=config.weather.use_weather,
                 descent_distance_from_model=descent_distance_from_model,
+                iterate_ground_distance=iterate_ground_distance,
             )
         except ValueError as exc:
             raise click.UsageError(str(exc)) from exc
