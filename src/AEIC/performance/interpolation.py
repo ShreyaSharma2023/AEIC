@@ -9,6 +9,60 @@ from scipy.interpolate import interpn
 
 from AEIC.performance.types import Performance
 
+GRIDDED_COLUMNS = ['fl', 'mass', 'tas', 'rocd', 'fuel_flow']
+
+
+def _is_dense(df: pd.DataFrame) -> bool:
+    return len(df.fl.unique()) * len(df.mass.unique()) == len(df)
+
+
+def _interpolate_blocks(df: pd.DataFrame, levels: np.ndarray) -> pd.DataFrame:
+    """Each mass's trajectory, interpolated linearly in flight level onto
+    `levels`. Above (below) a trajectory's own last (first) sample its end
+    values are held, so every mass has a row at every level."""
+    frames = []
+    for mass, block in df.groupby('mass', sort=True):
+        block = block.sort_values('fl')
+        frame = pd.DataFrame({'fl': levels, 'mass': mass})
+        for column in ('tas', 'rocd', 'fuel_flow'):
+            frame[column] = np.interp(levels, block.fl.values, block[column].values)
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True)[GRIDDED_COLUMNS]
+
+
+def grid_climb_trajectories(df: pd.DataFrame) -> pd.DataFrame:
+    """Turn PIANO's per-mass climb trajectories into a (FL, mass) grid.
+
+    Each mass is one trajectory, sampled at its own flight levels and ending at
+    its own ceiling, so together they are not a grid. The grid is the flight
+    levels of the trajectory that reaches highest (usually the lightest),
+    without FL0, the start of the climb. Every trajectory is interpolated onto
+    it, holding its last values above its own ceiling so the grid stays
+    rectangular without cutting off the lighter masses' higher levels. Levels
+    where any mass cannot climb, its held or interpolated rate of climb not
+    being positive, are dropped.
+
+    A table that is already a grid is returned as it is.
+    """
+    if _is_dense(df):
+        return df
+    reference = df.loc[df.groupby('mass').fl.transform('max') == df.fl.max()]
+    levels = np.unique(reference.fl.values[reference.fl.values > 0])
+    gridded = _interpolate_blocks(df, levels)
+    climbs = gridded.groupby('fl').rocd.min() > 0
+    return gridded[gridded.fl.isin(climbs[climbs].index)].reset_index(drop=True)
+
+
+def grid_descent_trajectories(df: pd.DataFrame) -> pd.DataFrame:
+    """Turn PIANO's per-mass descent trajectories into a (FL, mass) grid, on the
+    flight levels of the first (lightest) mass's trajectory, in the same way
+    as `grid_climb_trajectories`. A table that is already a grid is returned as
+    it is."""
+    if _is_dense(df):
+        return df
+    reference = df.loc[df.mass == df.mass.min()]
+    return _interpolate_blocks(df, np.unique(reference.fl.values))
+
 
 class Interpolator:
     """Grid-based interpolator for performance model data."""
