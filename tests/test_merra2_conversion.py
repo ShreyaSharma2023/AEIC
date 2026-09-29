@@ -42,17 +42,33 @@ def test_the_output_follows_the_order_of_the_target_levels():
     assert up[:, 0, 0] == pytest.approx(down[::-1, 0, 0])
 
 
-def test_levels_below_the_ground_have_zero_wind_not_nan():
-    """A 700 hPa surface is a mountain: the 850 and 1000 hPa levels are inside
-    it. The Weather reader rejects NaN, so they must be zero."""
+def test_levels_deep_inside_the_ground_have_zero_wind_not_nan():
+    """A 700 hPa surface is a mountain: the 1000 hPa level is far inside it. The
+    Weather reader rejects NaN, so it must be zero."""
     values, mids, surface = _column_winds(700.0)
 
     out = interp_to_pressure_levels(
         values, mids, surface, np.array([1000.0, 850.0, 500.0])
     )
 
-    assert out[0, 0, 0] == 0.0 and out[1, 0, 0] == 0.0
+    assert out[0, 0, 0] == 0.0
     assert out[2, 0, 0] == pytest.approx(A + B * np.log(500.0))
+
+
+def test_the_first_level_inside_the_ground_holds_the_surface_wind():
+    """The reader interpolates linearly between levels, so a zero at the first
+    level below the ground would drag the wind between the ground and the last
+    real level towards zero. That level takes the lowest layer's wind; the ones
+    below it, which no flight reaches, are zero."""
+    values, mids, surface = _column_winds(700.0)
+
+    out = interp_to_pressure_levels(
+        values, mids, surface, np.array([850.0, 800.0, 750.0, 1000.0])
+    )
+
+    # 750 is the first level inside a 700 hPa surface.
+    assert out[2, 0, 0] == pytest.approx(values[0, 0, 0])
+    assert out[0, 0, 0] == 0.0 and out[1, 0, 0] == 0.0 and out[3, 0, 0] == 0.0
 
 
 def test_between_the_lowest_level_and_the_ground_the_lowest_winds_are_held():
@@ -83,10 +99,13 @@ def test_each_column_uses_its_own_surface_pressure():
     mids = mid_pressures_hpa(surface)
     values = A + B * np.log(mids)
 
-    out = interp_to_pressure_levels(values, mids, surface, np.array([850.0]))
+    out = interp_to_pressure_levels(values, mids, surface, np.array([850.0, 950.0]))
 
     assert out[0, 0, 0] == pytest.approx(A + B * np.log(850.0))
-    assert out[0, 0, 1] == 0.0  # underground in the 700 hPa column only
+    # In the 700 hPa column 850 is the first level under the ground, and 950 is
+    # below that.
+    assert out[0, 0, 1] == pytest.approx(values[0, 0, 1])
+    assert out[1, 0, 1] == 0.0
 
 
 ###########################################

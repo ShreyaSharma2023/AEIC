@@ -142,17 +142,14 @@ def test_a_query_gets_the_record_of_its_own_hour_not_the_nearest(converted_dir):
     )
 
 
-def test_a_point_near_sea_level_is_inside_the_levels(converted_dir):
+def test_a_point_near_sea_level_gets_the_full_surface_wind(converted_dir):
     """The ISA surface is 1013.25 hPa, above the 1000 hPa level ERA5-style
-    products stop at; such a point used to be outside the data. The 1025 hPa
-    level is underground here and has zero wind, and the reader interpolates
-    linearly, so the wind between the ground and 1000 hPa is pulled towards
-    zero: it is between zero and the 1000 hPa wind, not equal to either."""
+    products stop at, so such a point used to be outside the data. The 1025 hPa
+    level is underground; it holds the surface wind, so the reader's linear
+    interpolation gives the real wind rather than one dragged towards zero."""
     gs = _eastward_ground_speed(_weather(converted_dir), -90.0, 6, altitude=5.0)
 
-    u_1000 = _u(-90.0, _hours(6))
-    assert TAS + min(0.0, u_1000) <= gs <= TAS + max(0.0, u_1000)
-    assert gs != pytest.approx(TAS)
+    assert gs == pytest.approx(TAS + _u(-90.0, _hours(6)), abs=1e-3)
 
 
 def test_wind_inside_a_mountain_is_zero(converted_dir):
