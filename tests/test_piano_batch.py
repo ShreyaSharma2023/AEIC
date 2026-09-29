@@ -8,22 +8,28 @@ the numbers are physically plausible.
 
 import csv
 import shutil
+import sqlite3
 
 import pytest
+from click.testing import CliRunner
 
+from AEIC.commands.make_piano_models import make_piano_models
 from AEIC.config import config
 from AEIC.parsers.piano_reader import PianoData
 from AEIC.performance.models import PerformanceModel
 from AEIC.performance.piano_batch import (
     BatchReport,
     climb_masses_kg,
+    crossover_altitude_ft,
     cruise_speeds,
     piano_overrides,
     read_airframes,
+    read_model_keys,
     run_batch,
     split_model_key,
 )
-from AEIC.units import KNOTS_TO_MPS, POUNDS_TO_KG
+from AEIC.units import FEET_TO_METERS, KNOTS_TO_MPS, POUNDS_TO_KG
+from AEIC.utils.standard_atmosphere import cas_to_tas, speed_of_sound_at_altitude
 
 SAVE_AS = 'TEST_AIRFRAME'
 EDB_UID = '01P11CM121'  # the only engine in the sample EDB
@@ -99,6 +105,36 @@ def test_the_climb_overrides_come_from_the_airframe_row():
     assert overrides.climb_mach == 0.780
     # Below FL100 the airframe table gives no speed, so the usual 250 kt.
     assert overrides.climb_cas_low_kts == 250.0
+
+
+@pytest.mark.parametrize('cas_kts, mach', [(300, 0.78), (280, 0.74), (250, 0.65)])
+def test_the_crossover_altitude_is_where_the_cas_reaches_the_mach(cas_kts, mach):
+    """The altitude at which flying the CAS and flying the Mach are the same
+    speed, so the climb schedule has no jump there."""
+    h = crossover_altitude_ft(cas_kts, mach) * FEET_TO_METERS
+
+    mach_of_cas = cas_to_tas(cas_kts * KNOTS_TO_MPS, h) / speed_of_sound_at_altitude(h)
+    assert mach_of_cas == pytest.approx(mach, abs=1e-4)
+
+
+def test_a_higher_mach_crosses_over_higher():
+    assert crossover_altitude_ft(300, 0.82) > crossover_altitude_ft(300, 0.74)
+
+
+def test_a_climb_mach_below_the_sea_level_mach_of_the_cas_has_no_crossover():
+    """A CAS that is already faster than the Mach at sea level never crosses."""
+    with pytest.raises(ValueError, match='crossover'):
+        crossover_altitude_ft(450, 0.5)
+
+
+def test_the_climb_overrides_state_a_complete_schedule():
+    """PIANO files that state no schedule need all four values, so the
+    crossover altitude is derived from the CAS and Mach the table gives."""
+    overrides = piano_overrides(ROW)
+
+    assert overrides.climb_crossover_altitude_ft == pytest.approx(
+        crossover_altitude_ft(300, 0.780)
+    )
 
 
 def test_cruise_speeds_fly_the_operating_mach():
@@ -223,3 +259,32 @@ def test_an_airframes_exports_are_parsed_once_for_all_its_engines(
     )
 
     assert len(calls) == 1
+
+
+###########################################
+######   Keys from a mission database ######
+###########################################
+
+
+def test_model_keys_are_the_distinct_keys_in_a_mission_database(tmp_path):
+    db = tmp_path / 'missions.sqlite'
+    con = sqlite3.connect(db)
+    con.execute('CREATE TABLE flights (id INTEGER, performance_model_key TEXT)')
+    con.executemany(
+        'INSERT INTO flights VALUES (?, ?)',
+        [(1, 'B_2'), (2, 'A_1'), (3, 'A_1'), (4, None)],
+    )
+    con.commit()
+    con.close()
+
+    # Flights with no key are the ones that fall back to the aircraft type;
+    # there is no model to build for them.
+    assert read_model_keys(db) == ['A_1', 'B_2']
+
+
+def test_the_command_is_registered_and_documented():
+    """Smoke test only: the behaviour is covered above."""
+    result = CliRunner().invoke(make_piano_models, ['--help'])
+
+    assert result.exit_code == 0
+    assert '--mission-db-file' in result.output
