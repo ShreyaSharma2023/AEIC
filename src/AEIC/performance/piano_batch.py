@@ -14,6 +14,7 @@ documented with the aircraft performance database parser, which owns it.
 from __future__ import annotations
 
 import csv
+import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,7 +25,8 @@ from AEIC.performance.edb import EDBEntry
 from AEIC.performance.model_builder import build_piano_model, write_performance_model
 from AEIC.performance.models.base import LTOPerformanceInput
 from AEIC.performance.types import SpeedData
-from AEIC.units import KNOTS_TO_MPS, POUNDS_TO_KG
+from AEIC.units import FEET_TO_METERS, KNOTS_TO_MPS, POUNDS_TO_KG
+from AEIC.utils.standard_atmosphere import cas_to_tas, speed_of_sound_at_altitude
 
 REQUIRED_COLUMNS = (
     'save_as',
@@ -87,13 +89,45 @@ def climb_masses_kg(value: str) -> list[float]:
     ]
 
 
+def crossover_altitude_ft(cas_kts: float, mach: float) -> float:
+    """Altitude [feet] at which a climb at `cas_kts` reaches `mach`, in the
+    standard atmosphere: above it the climb flies the Mach, below it the CAS.
+
+    Raises:
+        ValueError: If the CAS is already faster than the Mach at sea level, so
+            there is no crossover.
+    """
+
+    def mach_of_cas(altitude_m: float) -> float:
+        return float(
+            cas_to_tas(cas_kts * KNOTS_TO_MPS, altitude_m)
+            / speed_of_sound_at_altitude(altitude_m)
+        )
+
+    low, high = 0.0, 25_000.0  # metres; a CAS Mach rises with altitude
+    if mach_of_cas(low) >= mach or mach_of_cas(high) <= mach:
+        raise ValueError(
+            f'no crossover altitude for {cas_kts:g} kt CAS and Mach {mach:g}'
+        )
+    for _ in range(60):
+        mid = 0.5 * (low + high)
+        if mach_of_cas(mid) < mach:
+            low = mid
+        else:
+            high = mid
+    return 0.5 * (low + high) / FEET_TO_METERS
+
+
 def piano_overrides(row: dict[str, str]) -> PianoOverrides:
     """The climb inputs PIANO's exports do not contain, from an airframe row."""
+    cas_high = _number(row, 'op_climb_cas_kts')
+    mach = _number(row, 'op_climb_mach')
     return PianoOverrides(
         climb_masses_kg=climb_masses_kg(row['climb_start_masses_lb']),
         climb_cas_low_kts=LOW_CAS_KTS,
-        climb_cas_high_kts=_number(row, 'op_climb_cas_kts'),
-        climb_mach=_number(row, 'op_climb_mach'),
+        climb_cas_high_kts=cas_high,
+        climb_mach=mach,
+        climb_crossover_altitude_ft=crossover_altitude_ft(cas_high, mach),
     )
 
 
@@ -131,6 +165,20 @@ def split_model_key(key: str, airframes: Iterable[str]) -> tuple[str, str]:
     if not airframe or airframe not in set(airframes):
         raise ValueError(f'{key}: no airframe "{airframe}" in the airframe table')
     return airframe, uid
+
+
+def read_model_keys(mission_db: str | Path) -> list[str]:
+    """The distinct performance model keys in a mission database, sorted.
+    Flights without one fall back to their aircraft type, so have no model."""
+    con = sqlite3.connect(f'file:{mission_db}?mode=ro', uri=True)
+    try:
+        rows = con.execute(
+            'SELECT DISTINCT performance_model_key FROM flights '
+            'WHERE performance_model_key IS NOT NULL ORDER BY 1'
+        ).fetchall()
+    finally:
+        con.close()
+    return [key for (key,) in rows]
 
 
 ###########################################
