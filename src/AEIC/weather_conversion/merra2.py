@@ -49,12 +49,23 @@ def interp_to_pressure_levels(
     Interpolation is linear in ln(pressure) between the two model levels either
     side of the target. A target above the ground but outside the middles of the
     lowest or highest model level takes that level's wind. A target below the
-    ground, at a higher pressure than the column's surface, gets zero wind:
-    it is inside a mountain, and NaN is not accepted by the `Weather` reader.
+    ground, at a higher pressure than the column's surface, is inside a mountain
+    and NaN is not accepted by the `Weather` reader, so it gets zero wind, except
+    for the first such level in each column. The reader interpolates linearly
+    between levels, and a zero there would drag down the wind between the ground
+    and the last level above it, so that level holds the lowest layer's wind.
     """
     n_levels = values.shape[0]
     log_mid = np.log(mid_hpa)
     out = np.empty((len(targets_hpa),) + surface_hpa.shape)
+
+    # Per column, the lowest-pressure target that is still underground.
+    underground = np.where(
+        np.asarray(targets_hpa).reshape((-1,) + (1,) * surface_hpa.ndim) > surface_hpa,
+        np.asarray(targets_hpa).reshape((-1,) + (1,) * surface_hpa.ndim),
+        np.inf,
+    )
+    first_underground = underground.min(axis=0)
 
     for k, target in enumerate(targets_hpa):
         # mid_hpa falls with the level index, so this counts the levels at a
@@ -69,7 +80,11 @@ def interp_to_pressure_levels(
         log_lower, log_upper = at(log_mid, lower), at(log_mid, upper)
         weight = np.clip((log_lower - np.log(target)) / (log_lower - log_upper), 0, 1)
         wind = at(values, lower) + weight * (at(values, upper) - at(values, lower))
-        out[k] = np.where(target > surface_hpa, 0.0, wind)
+        out[k] = np.where(
+            target > surface_hpa,
+            np.where(target == first_underground, wind, 0.0),
+            wind,
+        )
 
     return out
 
