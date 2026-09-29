@@ -106,17 +106,36 @@ def test_min_and_max_mass_select_the_ends_of_the_mass_range(piano_model, phase, 
         )
 
 
-@pytest.mark.parametrize('phase', [p for p, _ in PHASES])
-def test_a_table_with_a_missing_cell_is_rejected_when_the_model_loads(
-    piano_model, phase
+# A hole in the cruise grid is rejected at load, in the cruise section below.
+# Climb and descent are not checked that way: they are one trajectory per mass,
+# gridded at load, so a short trajectory is not a hole.
+@pytest.mark.parametrize(('phase', 'rules'), PHASES)
+def test_a_trajectory_that_stops_early_still_loads_and_holds_its_last_values(
+    piano_model, phase, rules
 ):
-    """A hole in the (FL, mass) grid must fail once, at load, naming the
-    aircraft and phase, and not partway through a fleet run."""
+    """PIANO's climb and descent blocks end at their own ceilings, so a
+    heavier mass's block has no rows at the top flight levels. The model must
+    load and answer there with that block's last values."""
     data = piano_model.model_dump()
-    data[f'{phase}_flight_performance']['data'].pop(0)
+    table = data[f'{phase}_flight_performance']
+    cols = table['cols']
+    heaviest = max(row[cols.index('mass')] for row in table['data'])
+    top_fl = max(row[cols.index('fl')] for row in table['data'])
+    at_ceiling = [
+        row
+        for row in table['data']
+        if row[cols.index('mass')] == heaviest and row[cols.index('fl')] == top_fl
+    ]
+    table['data'] = [row for row in table['data'] if row not in at_ceiling]
 
-    with pytest.raises(ValidationError, match=f'{phase}.*every \\(FL, mass\\) pair'):
-        PianoPerformanceModel.model_validate(data)
+    model = PianoPerformanceModel.model_validate(data)
+
+    below = sorted(
+        (row for row in table['data'] if row[cols.index('mass')] == heaviest),
+        key=lambda row: row[cols.index('fl')],
+    )[-1]
+    perf = _evaluate(model, rules, top_fl, heaviest)
+    assert perf.fuel_flow == pytest.approx(below[cols.index('fuel_flow')], abs=1e-5)
 
 
 ###########################################

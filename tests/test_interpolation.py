@@ -10,7 +10,12 @@ import itertools
 import pandas as pd
 import pytest
 
-from AEIC.performance.interpolation import Interpolator, MachSweepInterpolator
+from AEIC.performance.interpolation import (
+    Interpolator,
+    MachSweepInterpolator,
+    grid_climb_trajectories,
+    grid_descent_trajectories,
+)
 
 
 def _table(rows):
@@ -171,3 +176,110 @@ def test_a_repeated_mach_within_a_cell_is_rejected():
     table = pd.concat([table, table.iloc[[0]]], ignore_index=True)
     with pytest.raises(ValueError, match='repeats Mach'):
         MachSweepInterpolator(table)
+
+
+###########################################
+######   Trajectory blocks -> grid   ######
+###########################################
+
+# PIANO writes each climb or descent as one trajectory per mass, sampled at its
+# own flight levels and ending at its own ceiling, so the blocks together are
+# not a grid. The interpolator needs a grid.
+
+LIGHT = 50000
+HEAVY = 60000
+
+
+def _ragged_climb():
+    """Light block reaches FL300, heavy block only FL250."""
+    return _table(
+        [
+            (0, LIGHT, 200.0, 10.0, 1.0),
+            (100, LIGHT, 220.0, 8.0, 0.8),
+            (200, LIGHT, 240.0, 5.0, 0.6),
+            (300, LIGHT, 260.0, 2.0, 0.4),
+            (0, HEAVY, 200.0, 8.0, 1.2),
+            (120, HEAVY, 224.0, 6.0, 1.0),
+            (250, HEAVY, 250.0, 3.0, 0.7),
+        ]
+    )
+
+
+def test_a_climb_is_gridded_onto_the_flight_levels_of_the_highest_block():
+    gridded = grid_climb_trajectories(_ragged_climb())
+
+    # FL0 is the start of the climb, not a level to grid onto.
+    assert sorted(gridded.fl.unique()) == [100, 200, 300]
+    assert len(gridded) == 6
+
+
+def test_a_blocks_values_are_interpolated_between_its_own_samples():
+    gridded = grid_climb_trajectories(_ragged_climb()).set_index(['fl', 'mass'])
+
+    # Heavy block, FL100: 100/120 of the way from (0, 8.0) to (120, 6.0).
+    assert gridded.loc[(100, HEAVY), 'rocd'] == pytest.approx(8.0 - 2.0 * 100 / 120)
+    # ... and of the way from tas 200 to 224, fuel flow 1.2 to 1.0.
+    assert gridded.loc[(100, HEAVY), 'tas'] == pytest.approx(200.0 + 24.0 * 100 / 120)
+    assert gridded.loc[(100, HEAVY), 'fuel_flow'] == pytest.approx(
+        1.2 - 0.2 * 100 / 120
+    )
+    # Heavy block, FL200: 80/130 of the way from (120, 6.0) to (250, 3.0).
+    assert gridded.loc[(200, HEAVY), 'rocd'] == pytest.approx(6.0 - 3.0 * 80 / 130)
+    # The light block already has a sample at each grid level.
+    assert gridded.loc[(200, LIGHT), 'rocd'] == pytest.approx(5.0)
+
+
+def test_above_a_blocks_ceiling_its_last_values_are_held():
+    """The heavy block stops at FL250 but the grid runs to FL300. This keeps the
+    grid rectangular without truncating the light block's higher levels."""
+    gridded = grid_climb_trajectories(_ragged_climb()).set_index(['fl', 'mass'])
+
+    assert gridded.loc[(300, HEAVY), 'rocd'] == pytest.approx(3.0)
+    assert gridded.loc[(300, HEAVY), 'fuel_flow'] == pytest.approx(0.7)
+
+
+def test_climb_levels_where_any_mass_cannot_climb_are_dropped():
+    rows = _ragged_climb()
+    rows.loc[rows.index[-1], 'rocd'] = 0.0  # heavy block's ceiling: no climb left
+
+    gridded = grid_climb_trajectories(rows)
+
+    # FL300 holds that zero, so it is not a level the aircraft can climb at.
+    # FL200 is interpolated towards it but still positive.
+    assert sorted(gridded.fl.unique()) == [100, 200]
+
+
+def test_a_climb_that_is_already_a_grid_is_left_alone():
+    dense = _table(
+        [
+            (100, LIGHT, 200.0, 10.0, 1.0),
+            (100, HEAVY, 200.0, 8.0, 1.2),
+            (200, LIGHT, 220.0, 6.0, 0.8),
+            (200, HEAVY, 220.0, 4.0, 1.0),
+        ]
+    )
+
+    pd.testing.assert_frame_equal(grid_climb_trajectories(dense), dense)
+
+
+def test_a_descent_is_gridded_onto_the_first_blocks_flight_levels():
+    descent = pd.DataFrame(
+        [
+            (300, LIGHT, 250.0, -10.0, 0.2),
+            (150, LIGHT, 240.0, -8.0, 0.2),
+            (0, LIGHT, 200.0, -6.0, 0.3),
+            (250, HEAVY, 245.0, -11.0, 0.25),
+            (0, HEAVY, 205.0, -7.0, 0.35),
+        ],
+        columns=['fl', 'mass', 'tas', 'rocd', 'fuel_flow'],
+    )
+
+    gridded = grid_descent_trajectories(descent).set_index(['fl', 'mass'])
+
+    assert sorted(gridded.index.get_level_values('fl').unique()) == [0, 150, 300]
+    # Heavy block at FL150: 150/250 of the way from (0, -7.0) to (250, -11.0).
+    assert gridded.loc[(150, HEAVY), 'rocd'] == pytest.approx(-7.0 - 4.0 * 150 / 250)
+    # Above its own top (FL250) the heavy block holds its last values.
+    assert gridded.loc[(300, HEAVY), 'rocd'] == pytest.approx(-11.0)
+    # No level is dropped for lack of climb: a descent has none to lose.
+    assert len(gridded) == 6

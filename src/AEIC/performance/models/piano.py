@@ -13,7 +13,12 @@ from typing import Any, Literal
 import pandas as pd
 from pydantic import PositiveFloat, PrivateAttr, model_validator
 
-from AEIC.performance.interpolation import Interpolator, MachSweepInterpolator
+from AEIC.performance.interpolation import (
+    Interpolator,
+    MachSweepInterpolator,
+    grid_climb_trajectories,
+    grid_descent_trajectories,
+)
 from AEIC.performance.types import (
     AircraftState,
     Performance,
@@ -103,7 +108,8 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
     def build_interpolators(self) -> PianoPerformanceModel:
         """Build the phase interpolators when the model loads, so a table with a
         hole in its (FL, mass) grid fails here, naming the aircraft, rather
-        than partway through a run."""
+        than partway through a run. PIANO's climb and descent tables are one
+        trajectory per mass, so they are gridded first."""
         interpolators = {}
         for phase, interpolator_class in (
             ('climb', Interpolator),
@@ -114,6 +120,10 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
             df = pd.DataFrame(
                 [row[: len(table.cols)] for row in table.data], columns=table.cols
             )
+            if phase == 'climb':
+                df = grid_climb_trajectories(df)
+            elif phase == 'descent':
+                df = grid_descent_trajectories(df)
             try:
                 interpolators[phase] = interpolator_class(df)
             except ValueError as exc:
