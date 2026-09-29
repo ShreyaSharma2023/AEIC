@@ -17,6 +17,7 @@ from AEIC.performance.interpolation import (
     Interpolator,
     MachSweepInterpolator,
     grid_climb_trajectories,
+    grid_cruise_levels,
     grid_descent_trajectories,
 )
 from AEIC.performance.types import (
@@ -122,6 +123,8 @@ class PianoPerformanceModel(BasePerformanceModel[SimpleFlightRules]):
             )
             if phase == 'climb':
                 df = grid_climb_trajectories(df)
+            elif phase == 'cruise':
+                df = grid_cruise_levels(df)
             elif phase == 'descent':
                 df = grid_descent_trajectories(df)
             try:
