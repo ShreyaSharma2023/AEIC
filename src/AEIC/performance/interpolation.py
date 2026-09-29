@@ -53,6 +53,21 @@ def grid_climb_trajectories(df: pd.DataFrame) -> pd.DataFrame:
     return gridded[gridded.fl.isin(climbs[climbs].index)].reset_index(drop=True)
 
 
+def grid_cruise_levels(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep the cruise flight levels that every mass has rows at.
+
+    A heavy aircraft cannot cruise at the highest flight levels, so PIANO's
+    cruise export has no rows there for it. Keeping those levels for the lighter
+    masses would leave holes in the (FL, mass) grid, so they are dropped for
+    every mass. A table with every level for every mass is returned as it is.
+    """
+    masses_at_level = df.groupby('fl').mass.nunique()
+    complete = masses_at_level[masses_at_level == df.mass.nunique()].index
+    if len(complete) == len(masses_at_level):
+        return df
+    return df[df.fl.isin(complete)].reset_index(drop=True)
+
+
 def grid_descent_trajectories(df: pd.DataFrame) -> pd.DataFrame:
     """Turn PIANO's per-mass descent trajectories into a (FL, mass) grid, on the
     flight levels of the first (lightest) mass's trajectory, in the same way

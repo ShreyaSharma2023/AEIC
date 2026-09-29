@@ -7,7 +7,6 @@ numbers are physically plausible.
 
 import pandas as pd
 import pytest
-from pydantic import ValidationError
 
 from AEIC.performance.interpolation import MachSweepInterpolator
 from AEIC.performance.model_builder import build_piano_model
@@ -296,17 +295,31 @@ def test_a_speed_the_aircraft_cannot_sustain_is_an_error_naming_the_aircraft(
         _evaluate(damaged, SimpleFlightRules.CRUISE, first.fl, first.mass)
 
 
-def test_a_cruise_table_with_a_missing_cell_is_rejected_when_the_model_loads(
+def test_a_cruise_level_that_one_mass_has_no_rows_at_is_dropped_for_every_mass(
     cruise_model,
 ):
+    """A heavy aircraft cannot cruise at the highest levels, so PIANO has no
+    rows for it there. The level is dropped for all masses rather than leaving
+    a hole in the grid; a request below the lowest level kept is clipped to it.
+    (A hole inside a single cell's Mach sweep is still rejected, see the
+    interpolator tests.)"""
     model = cruise_model(_schedule())
     df = _cruise_df(model)
-    first = df.iloc[0]
+    first = df[df.fl == df.fl.min()].iloc[0]  # drop a cell at the lowest level
     missing = (df.fl == first.fl) & (df.mass == first.mass)
 
     data = model.model_dump()
     data['cruise_flight_performance']['data'] = df[~missing].values.tolist()
     data['cruise_flight_performance']['cols'] = list(df.columns)
 
-    with pytest.raises(ValidationError, match=r'cruise.*every \(FL, mass\) pair'):
-        PianoPerformanceModel.model_validate(data)
+    reloaded = PianoPerformanceModel.model_validate(data)
+
+    kept = df[~missing]
+    masses_at_level = kept.groupby('fl').mass.nunique()
+    lowest_kept = masses_at_level[masses_at_level == kept.mass.nunique()].index.min()
+    assert lowest_kept > first.fl
+    at_dropped = _evaluate(reloaded, SimpleFlightRules.CRUISE, first.fl, first.mass)
+    at_lowest_kept = _evaluate(
+        reloaded, SimpleFlightRules.CRUISE, lowest_kept, first.mass
+    )
+    assert at_dropped.fuel_flow == pytest.approx(at_lowest_kept.fuel_flow)

@@ -14,6 +14,7 @@ from AEIC.performance.interpolation import (
     Interpolator,
     MachSweepInterpolator,
     grid_climb_trajectories,
+    grid_cruise_levels,
     grid_descent_trajectories,
 )
 
@@ -283,3 +284,33 @@ def test_a_descent_is_gridded_onto_the_first_blocks_flight_levels():
     assert gridded.loc[(300, HEAVY), 'rocd'] == pytest.approx(-11.0)
     # No level is dropped for lack of climb: a descent has none to lose.
     assert len(gridded) == 6
+
+
+def test_cruise_levels_that_a_mass_cannot_fly_are_dropped_for_every_mass():
+    """A heavy aircraft has no cruise rows at the top flight levels, since it
+    cannot fly there. Keeping those levels for the lighter masses would leave
+    holes in the (FL, mass) grid, so only levels every mass has are kept."""
+    cruise = pd.DataFrame(
+        [
+            (300, LIGHT, 0.78, 230.0, 0.0, 1.0),
+            (310, LIGHT, 0.78, 232.0, 0.0, 0.9),
+            (320, LIGHT, 0.78, 234.0, 0.0, 0.8),
+            (300, HEAVY, 0.78, 230.0, 0.0, 1.2),
+            (310, HEAVY, 0.78, 232.0, 0.0, 1.1),
+        ],
+        columns=['fl', 'mass', 'mach', 'tas', 'rocd', 'fuel_flow'],
+    )
+
+    gridded = grid_cruise_levels(cruise)
+
+    assert sorted(gridded.fl.unique()) == [300, 310]
+    assert len(gridded) == 4
+
+
+def test_a_cruise_table_with_every_level_for_every_mass_is_left_alone():
+    cruise = pd.DataFrame(
+        [(300, LIGHT, 0.78, 1.0), (300, HEAVY, 0.78, 1.2)],
+        columns=['fl', 'mass', 'mach', 'fuel_flow'],
+    )
+
+    pd.testing.assert_frame_equal(grid_cruise_levels(cruise), cruise)
