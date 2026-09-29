@@ -39,6 +39,8 @@ REQUIRED_COLUMNS = (
     'op_cruise_mach',
     'op_climb_mach',
     'op_climb_cas_kts',
+    'op_descent_mach',
+    'op_descent_cas_kts',
 )
 
 LOW_CAS_KTS = 250.0
@@ -118,11 +120,29 @@ def crossover_altitude_ft(cas_kts: float, mach: float) -> float:
     return 0.5 * (low + high) / FEET_TO_METERS
 
 
+def _descent_overrides(row: dict[str, str]) -> dict[str, float]:
+    """The descent schedule from an airframe row, all of it or none. Some PIANO
+    descent exports state no schedule; where the table has none either, the
+    file's own is used, and a file with none is then an error."""
+    if not row['op_descent_cas_kts'].strip() or not row['op_descent_mach'].strip():
+        return {}
+    cas_high = _number(row, 'op_descent_cas_kts')
+    mach = _number(row, 'op_descent_mach')
+    return {
+        'descent_cas_low_kts': LOW_CAS_KTS,
+        'descent_cas_high_kts': cas_high,
+        'descent_mach': mach,
+        'descent_crossover_altitude_ft': crossover_altitude_ft(cas_high, mach),
+    }
+
+
 def piano_overrides(row: dict[str, str]) -> PianoOverrides:
     """The climb inputs PIANO's exports do not contain, from an airframe row."""
     cas_high = _number(row, 'op_climb_cas_kts')
     mach = _number(row, 'op_climb_mach')
+    descent = _descent_overrides(row)
     return PianoOverrides(
+        **descent,
         climb_masses_kg=climb_masses_kg(row['climb_start_masses_lb']),
         climb_cas_low_kts=LOW_CAS_KTS,
         climb_cas_high_kts=cas_high,

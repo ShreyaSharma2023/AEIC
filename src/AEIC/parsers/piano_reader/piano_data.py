@@ -36,6 +36,18 @@ class PianoOverrides:
     climb_crossover_altitude_ft: float | None = None
     """Altitude above which the climb flies its Mach number [feet]."""
 
+    descent_cas_low_kts: float | None = None
+    """Descent calibrated airspeed below FL100 [knots]."""
+
+    descent_cas_high_kts: float | None = None
+    """Descent calibrated airspeed between FL100 and the crossover [knots]."""
+
+    descent_mach: float | None = None
+    """Descent Mach number above the crossover altitude."""
+
+    descent_crossover_altitude_ft: float | None = None
+    """Altitude above which the descent flies its Mach number [feet]."""
+
 
 @dataclass
 class PianoData:
@@ -99,7 +111,7 @@ class PianoData:
         climb_speeds, isa_offset, maximum_altitude_ft, climb = _parse_climb(
             climb_file, overrides
         )
-        descent_speeds, descent, idle_thrust = _parse_descent(descent_file)
+        descent_speeds, descent, idle_thrust = _parse_descent(descent_file, overrides)
 
         return cls(
             aircraft_name=aircraft_name,

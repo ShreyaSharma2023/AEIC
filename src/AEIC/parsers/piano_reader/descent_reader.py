@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import TYPE_CHECKING
 
 from AEIC.parsers.piano_reader.common import (
+    _Block,
     _cross_check_fuel_burn,
     _cross_check_tas,
     _deltas,
@@ -26,6 +28,9 @@ from AEIC.units import (
     POUNDS_FORCE_TO_NEWTONS,
     POUNDS_TO_KG,
 )
+
+if TYPE_CHECKING:
+    from AEIC.parsers.piano_reader.piano_data import PianoOverrides
 
 logger = logging.getLogger(__name__)
 
@@ -58,24 +63,82 @@ _IDLE_THRUST_RE = re.compile(r'Idle thrust below\s+([\d.]+)feet')
 # ---------------------------------------------------------------------------
 
 
-def _parse_descent(path: str) -> tuple[SpeedData, TableInput, TableInput]:
+def _descent_schedule(blocks: list[_Block], overrides: PianoOverrides) -> _Schedule:
+    """Resolve the descent airspeed schedule.
+
+    The schedule is a property of the file: every block that states one must
+    state the same. Values the caller supplies replace the file's. Some PIANO
+    exports state none, and then the caller must supply all of it.
+
+    Raises:
+        ValueError: If two blocks state different schedules, or no block states
+            one and the overrides do not supply a complete one.
+    """
+    stated: _Schedule | None = None
+    for n, block in enumerate(blocks):
+        block_schedule = _parse_schedule(block.header_lines, descending=True)
+        if block_schedule is None:
+            continue
+        if stated is None:
+            stated = block_schedule
+        elif block_schedule != stated:
+            raise ValueError(
+                f'Descent block {n + 1} states the airspeed schedule '
+                f'{block_schedule}, which differs from the first block\'s '
+                f'{stated}; the airspeed schedule must be the same across the '
+                'file'
+            )
+
+    supplied = {
+        '--descent-cas-low-kts': overrides.descent_cas_low_kts,
+        '--descent-cas-high-kts': overrides.descent_cas_high_kts,
+        '--descent-mach': overrides.descent_mach,
+        '--descent-crossover-altitude-ft': overrides.descent_crossover_altitude_ft,
+    }
+    if stated is None:
+        missing = [name for name, value in supplied.items() if value is None]
+        if missing:
+            raise ValueError(
+                'No descent block states an airspeed schedule, so it must be '
+                f'supplied explicitly. Missing: {", ".join(missing)}'
+            )
+        return _Schedule(
+            cas_low_kts=overrides.descent_cas_low_kts,
+            cas_high_kts=overrides.descent_cas_high_kts,
+            mach=overrides.descent_mach,
+            crossover_ft=overrides.descent_crossover_altitude_ft,
+        )
+
+    def pick(value: float | None, from_file: float) -> float:
+        return value if value is not None else from_file
+
+    return _Schedule(
+        cas_low_kts=pick(overrides.descent_cas_low_kts, stated.cas_low_kts),
+        cas_high_kts=pick(overrides.descent_cas_high_kts, stated.cas_high_kts),
+        mach=pick(overrides.descent_mach, stated.mach),
+        crossover_ft=pick(overrides.descent_crossover_altitude_ft, stated.crossover_ft),
+    )
+
+
+def _parse_descent(
+    path: str, overrides: PianoOverrides
+) -> tuple[SpeedData, TableInput, TableInput]:
     """Parse a PIANO descent details export.
 
     Returns the descent speed schedule, the descent table and the idle thrust
     table.
 
     Raises:
-        ValueError: If a block has no mass or no airspeed schedule header.
-            Unlike climb, PIANO writes a full header for every descent block.
-        ValueError: If two blocks state different airspeed schedules. The
-            schedule must be the same across the file.
+        ValueError: If a block has no mass, if two blocks state different
+            airspeed schedules, or if no block states one and the overrides do
+            not supply it (see `_descent_schedule`).
     """
     lines = _read_lines(path)
     blocks = _split_blocks(lines, 'Descent details', _DESCENT_ROW_COLS)
 
     data = []
     idle_thrust = []
-    schedule: _Schedule | None = None
+    schedule = _descent_schedule(blocks, overrides)
 
     for n, block in enumerate(blocks):
         label = f'Descent block {n + 1}'
@@ -85,18 +148,6 @@ def _parse_descent(path: str) -> tuple[SpeedData, TableInput, TableInput]:
         if mass_match is None:
             raise ValueError(f'{label} has no "Mass" header')
         mass = float(mass_match.group(1)) * POUNDS_TO_KG
-
-        block_schedule = _parse_schedule(block.header_lines, descending=True)
-        if block_schedule is None:
-            raise ValueError(f'{label} has no "Airspeed schedule" header')
-        if schedule is None:
-            schedule = block_schedule
-        elif block_schedule != schedule:
-            raise ValueError(
-                f'{label} states the airspeed schedule {block_schedule}, which '
-                f'differs from the first block\'s {schedule}; the airspeed '
-                f'schedule must be the same across the file'
-            )
 
         idle_match = _find(_IDLE_THRUST_RE, block.header_lines)
         if idle_match is None:
@@ -144,7 +195,7 @@ def _parse_descent(path: str) -> tuple[SpeedData, TableInput, TableInput]:
                 ]
             )
 
-    if schedule is None:
+    if not blocks:
         raise ValueError(f'No descent block found in {path}')
 
     return (
