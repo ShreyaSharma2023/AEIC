@@ -141,6 +141,66 @@ def test_crossover_altitude_override(piano_data):
     assert overridden.climb_speeds.mach == piano_data.climb_speeds.mach
 
 
+def test_descent_schedule_overrides(piano_data):
+    overridden = load(descent_cas_high_kts=290.0, descent_mach=0.78)
+    assert overridden.descent_speeds.cas_high == pytest.approx(290 * KNOTS_TO_MPS)
+    assert overridden.descent_speeds.mach == pytest.approx(0.78)
+    # Untouched values still come from the file.
+    assert overridden.descent_speeds.cas_low == piano_data.descent_speeds.cas_low
+
+
+def _descent_without_schedule(tmp_path: Path) -> Path:
+    """The descent fixture with every airspeed schedule line removed."""
+    lines = (
+        config.file_location(PIANO_DESCENT_FILE).read_text().splitlines(keepends=True)
+    )
+    descent_file = tmp_path / 'descent.txt'
+    descent_file.write_text(
+        ''.join(line for line in lines if 'Airspeed schedule' not in line)
+    )
+    return descent_file
+
+
+def _load_with_descent_file(descent_file, **overrides) -> PianoData:
+    return PianoData.load(
+        str(config.file_location(PIANO_CRUISE_FILE)),
+        str(config.file_location(PIANO_CLIMB_FILE)),
+        str(descent_file),
+        overrides=PianoOverrides(climb_masses_kg=CLIMB_MASSES_KG, **overrides),
+    )
+
+
+def test_a_descent_that_states_no_schedule_must_have_one_supplied(tmp_path):
+    """Some PIANO descent exports carry no airspeed schedule. As for climb, the
+    whole schedule must then come from the caller, and the error names what is
+    missing."""
+    descent_file = _descent_without_schedule(tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match=r'No descent block states an airspeed schedule.*'
+        r'--descent-mach.*--descent-crossover-altitude-ft',
+    ):
+        _load_with_descent_file(descent_file, descent_cas_low_kts=250.0)
+
+
+def test_a_complete_supplied_descent_schedule_replaces_the_missing_one(tmp_path):
+    loaded = _load_with_descent_file(
+        _descent_without_schedule(tmp_path),
+        descent_cas_low_kts=250.0,
+        descent_cas_high_kts=290.0,
+        descent_mach=0.78,
+        descent_crossover_altitude_ft=31000.0,
+    )
+
+    assert loaded.descent_speeds.cas_low == pytest.approx(250 * KNOTS_TO_MPS)
+    assert loaded.descent_speeds.cas_high == pytest.approx(290 * KNOTS_TO_MPS)
+    assert loaded.descent_speeds.mach == pytest.approx(0.78)
+    assert loaded.descent_speeds.crossover_altitude_m == pytest.approx(
+        31000 * FEET_TO_METERS
+    )
+
+
 def _climb_without_schedule(tmp_path: Path) -> Path:
     """The climb fixture with its one airspeed schedule line removed."""
     lines = config.file_location(PIANO_CLIMB_FILE).read_text().splitlines(keepends=True)

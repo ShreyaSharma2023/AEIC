@@ -45,6 +45,8 @@ ROW = {
     'op_cruise_mach': '0.789',
     'op_climb_mach': '0.780',
     'op_climb_cas_kts': '300',
+    'op_descent_mach': '0.780',
+    'op_descent_cas_kts': '290',
 }
 
 
@@ -135,6 +137,30 @@ def test_the_climb_overrides_state_a_complete_schedule():
     assert overrides.climb_crossover_altitude_ft == pytest.approx(
         crossover_altitude_ft(300, 0.780)
     )
+
+
+def test_the_descent_overrides_come_from_the_airframe_row():
+    overrides = piano_overrides(ROW)
+
+    assert overrides.descent_cas_low_kts == 250.0
+    assert overrides.descent_cas_high_kts == 290.0
+    assert overrides.descent_mach == 0.780
+    assert overrides.descent_crossover_altitude_ft == pytest.approx(
+        crossover_altitude_ft(290, 0.780)
+    )
+
+
+@pytest.mark.parametrize('blank', ['op_descent_mach', 'op_descent_cas_kts'])
+def test_a_row_without_descent_speeds_leaves_the_descent_schedule_to_the_file(blank):
+    """Only some airframes need the table's descent speeds, because their PIANO
+    export states none; where the table has none either, the file's own
+    schedule is used, and a file with none is then an error."""
+    overrides = piano_overrides({**ROW, blank: ''})
+
+    assert overrides.descent_cas_low_kts is None
+    assert overrides.descent_cas_high_kts is None
+    assert overrides.descent_mach is None
+    assert overrides.descent_crossover_altitude_ft is None
 
 
 def test_cruise_speeds_fly_the_operating_mach():
@@ -288,3 +314,21 @@ def test_the_command_is_registered_and_documented():
 
     assert result.exit_code == 0
     assert '--mission-db-file' in result.output
+
+
+def test_an_export_with_no_descent_schedule_uses_the_airframe_tables_speeds(
+    manifest, piano_root, tmp_path
+):
+    """Two real PIANO descent exports state no airspeed schedule."""
+    descent = piano_root / 'data' / 'performance' / SAVE_AS / f'{SAVE_AS}_descent'
+    lines = descent.read_text().splitlines(keepends=True)
+    descent.write_text(
+        ''.join(line for line in lines if 'Airspeed schedule' not in line)
+    )
+    key = f'{SAVE_AS}_{EDB_UID}'
+
+    report = batch([key], manifest, piano_root, tmp_path)
+
+    assert report.failed == {}
+    model = PerformanceModel.load(tmp_path / 'models' / f'{key}.toml')
+    assert model.speeds.descent.mach == 0.780
