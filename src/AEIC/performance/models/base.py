@@ -206,7 +206,11 @@ class BasePerformanceModel[RulesT](CIBaseModel, ABC):
             raise ValueError(
                 'LTO performance data not available, so no engine ID for EDB lookup.'
             )
-        return EDBEntry.get_engine(config.engine_file, self.lto_performance.ICAO_UID)
+        # An engine with no nvPM measurements is not an error: the emissions
+        # calculation then estimates nvPM from its smoke number (SCOPE11).
+        return EDBEntry.get_engine(
+            config.engine_file, self.lto_performance.ICAO_UID, strict=False
+        )
 
     @property
     def apu(self) -> APU | None:
