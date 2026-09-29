@@ -8,6 +8,7 @@ subcommands covering the end-to-end inventory workflow:
 | `aeic convert-oag-data` | Convert an OAG CSV file to a mission database. See [OAG flight data](oag.md). |
 | `aeic make-performance-model` | Build a performance model TOML file, with one subcommand per model type (`legacy`, `piano`, and the `tasopt` stub). See [Performance model files](performance_models/performance_model_files.md). |
 | `aeic make-piano-models` | Build one PIANO performance model per performance model key (`<airframe>_<EDB UID>`) found in a mission database. Takes an airframe table (masses, speeds, engines per airframe), the PIANO database and the Emissions Databank, and exits non-zero if any model cannot be built. See `AEIC.performance.piano_batch`. |
+| `aeic make-weather-data` | Convert reanalysis winds (`merra2`: GEOS-Chem's MERRA2 A3dyn/I3 files) into daily files of hourly winds on fixed pressure levels, with zero wind inside the ground. See `AEIC.weather_conversion.merra2`. |
 | `aeic run` | Simulate trajectories for the missions in a database. See [below](#aeic-run). |
 | `aeic merge-stores` | Merge per-slice trajectory stores produced by parallel simulation runs. See [below](#aeic-merge-stores). |
 | `aeic make-file-bundle` | Build a reproducibility bundle containing every file referenced by a trajectory store. See [below](#aeic-make-file-bundle). |

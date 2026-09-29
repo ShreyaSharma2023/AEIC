@@ -205,3 +205,47 @@ def test_another_years_files_can_stand_in_and_the_result_is_labelled_as_the_day(
 
     assert ds.valid_time.dt.year.values.tolist() == [2025] * 24
     assert ds.valid_time.dt.month.values.tolist() == [11] * 24
+
+
+###########################################
+######   A range of days             ######
+###########################################
+
+
+def test_a_range_of_days_is_written_once_and_skipped_when_it_already_exists(tmp_path):
+    from AEIC.weather_conversion.merra2 import convert_range
+
+    source = tmp_path / 'source'
+    _write_source_files(source, THREE_DAYS)
+    out = tmp_path / 'out'
+
+    first = convert_range(source, out, DAY, DAY)
+    again = convert_range(source, out, DAY, DAY)
+    forced = convert_range(source, out, DAY, DAY, force=True)
+
+    assert [p.name for p in first.written] == [f'{DAY:%Y-%m-%d}.nc']
+    assert again.written == [] and len(again.skipped) == 1
+    assert len(forced.written) == 1
+    assert not list(out.glob('*.part'))
+
+
+def test_a_converted_day_can_be_verified_through_the_weather_reader(tmp_path):
+    from AEIC.weather_conversion.merra2 import convert_range, verify_day
+
+    source = tmp_path / 'source'
+    _write_source_files(source, THREE_DAYS)
+    convert_range(source, tmp_path / 'out', DAY, DAY)
+
+    verify_day(tmp_path / 'out', DAY)  # raises if the reader cannot use the file
+
+
+def test_the_command_is_registered_and_documented():
+    """Smoke test only: the behaviour is covered above."""
+    from click.testing import CliRunner
+
+    from AEIC.commands.make_weather_data import make_weather_data
+
+    result = CliRunner().invoke(make_weather_data, ['merra2', '--help'])
+
+    assert result.exit_code == 0
+    assert '--source-dir' in result.output

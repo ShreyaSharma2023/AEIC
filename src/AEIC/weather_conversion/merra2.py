@@ -10,6 +10,7 @@ column, and levels that lie inside the ground get zero wind.
 # TODO: Remove this when we move to Python 3.14+.
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -230,3 +231,69 @@ def write_day(dataset: xr.Dataset, path: Path) -> None:
     temporary = path.with_suffix('.nc.part')
     dataset.to_netcdf(temporary, encoding=encoding)
     temporary.replace(path)
+
+
+@dataclass
+class ConversionReport:
+    """The daily files a conversion wrote and the ones that already existed."""
+
+    written: list[Path] = field(default_factory=list)
+    skipped: list[Path] = field(default_factory=list)
+
+
+def convert_range(
+    source_dir: str | Path,
+    output_dir: str | Path,
+    start: date,
+    end: date,
+    *,
+    source_year: int | None = None,
+    force: bool = False,
+) -> ConversionReport:
+    """Convert every day from `start` to `end` inclusive into
+    ``<output_dir>/YYYY-MM-DD.nc``, the name a daily `Weather` reader looks for.
+    Days whose file already exists are skipped unless `force` is set, so an
+    interrupted run can be repeated."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report = ConversionReport()
+    day = start
+    while day <= end:
+        path = output_dir / f'{day:%Y-%m-%d}.nc'
+        if path.exists() and not force:
+            report.skipped.append(path)
+        else:
+            write_day(convert_day(day, source_dir, source_year=source_year), path)
+            report.written.append(path)
+        day += timedelta(1)
+    return report
+
+
+def verify_day(output_dir: str | Path, day: date) -> None:
+    """Read a converted day back through `Weather`, at the first and last hour
+    of the day, near the ground and at cruise altitude. A file that loads but
+    cannot answer these (wrong layout, NaN, missing levels) fails here, rather
+    than on the first flight that needs it.
+
+    Raises:
+        ValueError: If the reader cannot answer, or returns a non-finite speed.
+    """
+    import pandas as pd
+
+    from AEIC.config.weather import TemporalResolution
+    from AEIC.trajectories.ground_track import GroundTrack
+    from AEIC.types import Location
+    from AEIC.weather import Weather
+
+    weather = Weather(
+        data_dir=output_dir,
+        file_resolution=TemporalResolution.DAILY,
+        data_resolution=TemporalResolution.HOURLY,
+    )
+    point = GroundTrack.great_circle(Location(-71.0, 42.0), Location(-70.0, 42.0))[0]
+    for hour in (0, 23):
+        time = pd.Timestamp(day.isoformat()) + pd.Timedelta(hours=hour)
+        for altitude in (5.0, 10_000.0):
+            speed = weather.get_ground_speed(time, point, altitude, 200.0)
+            if not np.isfinite(speed):
+                raise ValueError(f'{day}: no finite ground speed at {time}')
