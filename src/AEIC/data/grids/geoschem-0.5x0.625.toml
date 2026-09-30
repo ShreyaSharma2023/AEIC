@@ -1,0 +1,15 @@
+# GEOS-Chem's native MERRA2 grid: 0.5 x 0.625 degrees, and its 72 hybrid
+# sigma-pressure levels taken at a standard surface pressure of 1013.25 hPa.
+#
+# Latitude is 360 uniform 0.5 degree bins; the model has 361 rows with half-size
+# rows at the poles, which a model regridding the file to its own grid absorbs.
+
+[latitude]
+resolution = 0.5
+
+[longitude]
+resolution = 0.625
+
+[altitude]
+mode = "geoschem_72"
+surface_pressure = 1013.25
