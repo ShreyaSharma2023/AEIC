@@ -246,3 +246,73 @@ def test_get_EDB_data_for_engine_returns_engine_data(
     own test ID rather than failing the first `assert` in a wall.
     """
     assert getattr(sample_engine_info, attr) == expected
+
+
+###########################################
+######   Reading the workbook once   ######
+###########################################
+
+
+def _counting_workbook(monkeypatch, gaseous, nvpm):
+    """Patch `pd.ExcelFile` and return the list of paths it was opened with."""
+    opened = []
+
+    def open_workbook(path):
+        opened.append(path)
+        return DummyExcelFile(gaseous, nvpm)
+
+    monkeypatch.setattr('AEIC.performance.edb.pd.ExcelFile', open_workbook)
+    return opened
+
+
+def test_looking_up_several_engines_reads_the_workbook_once(tmp_path, monkeypatch):
+    """The workbook is slow to parse (seconds), and a run looks up an engine for
+    each of hundreds of performance models."""
+    gaseous = pd.concat([_full_gaseous_row('111'), _full_gaseous_row('222')])
+    nvpm = pd.DataFrame({'UID No': []})
+    path = tmp_path / 'edb.xlsx'
+    path.touch()
+    opened = _counting_workbook(monkeypatch, gaseous, nvpm)
+
+    first = EDBEntry.get_engine(path, uid='111', strict=False)
+    second = EDBEntry.get_engine(path, uid='222', strict=False)
+    again = EDBEntry.get_engine(path, uid='111', strict=False)
+
+    assert len(opened) == 1
+    assert (first.uid, second.uid) == ('111', '222')
+    assert again == first
+
+
+def test_a_workbook_that_changes_on_disk_is_read_again(tmp_path, monkeypatch):
+    gaseous = _full_gaseous_row('111')
+    path = tmp_path / 'edb.xlsx'
+    path.write_text('old')
+    opened = _counting_workbook(monkeypatch, gaseous, pd.DataFrame({'UID No': []}))
+    EDBEntry.get_engine(path, uid='111', strict=False)
+
+    path.write_text('a different, longer file')
+    EDBEntry.get_engine(path, uid='111', strict=False)
+
+    assert len(opened) == 2
+
+
+def test_a_lookup_that_fails_does_not_stop_a_later_one_succeeding(
+    tmp_path, monkeypatch
+):
+    """An unknown UID is an error each time, and does not poison the cache."""
+    gaseous = _full_gaseous_row('111')
+    path = tmp_path / 'edb.xlsx'
+    path.touch()
+    _counting_workbook(monkeypatch, gaseous, pd.DataFrame({'UID No': []}))
+
+    with pytest.raises(ValueError, match='UID 999 not found'):
+        EDBEntry.get_engine(path, uid='999', strict=False)
+    with pytest.raises(ValueError, match='UID 999 not found'):
+        EDBEntry.get_engine(path, uid='999', strict=False)
+
+    assert EDBEntry.get_engine(path, uid='111', strict=False).uid == '111'
+
+
+def test_a_workbook_that_does_not_exist_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match='Unable to open EDB workbook'):
+        EDBEntry.get_engine(tmp_path / 'missing.xlsx', uid='111')
