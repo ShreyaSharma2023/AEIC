@@ -3,11 +3,15 @@
 # TODO: Remove this when we migrate to Python 3.14+.
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interpn
 
 from AEIC.performance.types import Performance
+
+logger = logging.getLogger(__name__)
 
 GRIDDED_COLUMNS = ['fl', 'mass', 'tas', 'rocd', 'fuel_flow']
 
@@ -163,15 +167,24 @@ class MachSweepInterpolator:
     cell, since an aircraft cannot sustain every speed at every flight level
     and mass and those rows are simply absent.
 
-    A Mach outside the range tabulated for a cell the query needs is an error,
-    not clipped: the nearest tabulated Mach is a different speed, so using it
-    would return a plausible but wrong value.
+    A Mach a little outside the range tabulated for a cell the query needs
+    takes the nearest tabulated Mach, and is logged once per cell. A heavy
+    aircraft at a low flight level cannot sustain speeds below the lowest
+    tabulated, and a flight's speed schedule can ask for a hair less. A Mach
+    further out than `max_mach_gap` is an error, not clipped: the nearest
+    tabulated Mach is then a different speed, so using it would return a
+    plausible but wrong value.
     """
 
     MACH_TOL = 1e-9
     """Tolerance on the edge of a cell's tabulated Mach range."""
 
-    def __init__(self, df: pd.DataFrame):
+    def __init__(self, df: pd.DataFrame, max_mach_gap: float = 0.02):
+        self.max_mach_gap = max_mach_gap
+        """Largest distance [Mach] outside a cell's tabulated range that the
+        nearest tabulated Mach is still used for. 0.02 is about 6 m/s at
+        cruise altitude."""
+        self._warned: set[tuple[float, float]] = set()
         if df.duplicated(subset=['fl', 'mass', 'mach']).any():
             raise ValueError(
                 'Cruise table repeats Mach numbers within an FL, mass cell'
@@ -217,10 +230,21 @@ class MachSweepInterpolator:
         fl, mass = float(self._fls[i]), float(self._masses[j])
         machs, values = self._cells[(fl, mass)]
         if mach < machs[0] - self.MACH_TOL or mach > machs[-1] + self.MACH_TOL:
-            raise ValueError(
-                f'no cruise data at Mach {mach:.3f} for FL {fl:g} and mass '
-                f'{mass:g} kg: tabulated range is {machs[0]:.3f}-{machs[-1]:.3f}'
-            )
+            nearest = float(machs[0] if mach < machs[0] else machs[-1])
+            if abs(mach - nearest) > self.max_mach_gap:
+                raise ValueError(
+                    f'no cruise data at Mach {mach:.3f} for FL {fl:g} and mass '
+                    f'{mass:g} kg: tabulated range is {machs[0]:.3f}-{machs[-1]:.3f}'
+                )
+            if (fl, mass) not in self._warned:
+                self._warned.add((fl, mass))
+                logger.warning(
+                    f'no cruise data at Mach {mach:.3f} for FL {fl:g} and mass '
+                    f'{mass:g} kg: using the nearest tabulated Mach {nearest:.3f} '
+                    f'(tabulated range {machs[0]:.3f}-{machs[-1]:.3f})'
+                )
+        # np.interp holds the end values beyond the tabulated range, which is
+        # the nearest tabulated Mach.
         return np.array([np.interp(mach, machs, values[:, k]) for k in range(3)])
 
     def __call__(self, fl: float, mass: float, mach: float) -> Performance:
