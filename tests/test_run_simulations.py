@@ -4,11 +4,18 @@ The choice lives in a plain function so it can be tested directly. Click only
 passes the command line values in.
 """
 
+from datetime import UTC, date
+
 import pytest
 from click.testing import CliRunner
 
 import AEIC.trajectories.builders as tb
-from AEIC.commands.run_simulations import make_trajectory_builder, run_simulations
+from AEIC.commands.run_simulations import (
+    make_trajectory_builder,
+    plan_slice,
+    run_simulations,
+)
+from AEIC.missions import Database
 
 
 def test_the_defaults_are_the_legacy_builder_without_mass_iteration():
@@ -71,5 +78,51 @@ def test_the_options_are_on_the_command_line():
         '--no-iterate-mass',
         '--descent-distance-from-model',
         '--load-factor-file',
+        '--departure-date',
     ):
         assert option in result.output
+
+
+###########################################
+######   Which flights a slice flies ######
+###########################################
+
+BUSY_DAY = date(2019, 1, 8)  # 8 flights in the test subset
+
+
+@pytest.fixture
+def db(test_data_dir):
+    with Database(test_data_dir / 'missions/oag-2019-test-subset.sqlite') as db:
+        yield db
+
+
+def flights_of(db, query):
+    return [m for m in db(query)]
+
+
+def test_without_a_date_the_slices_partition_all_the_flights(db):
+    queries = [plan_slice(db, None, 4, i) for i in range(4)]
+
+    assert sum(q.limit for q in queries) == 1197
+    assert [q.offset for q in queries] == sorted(q.offset for q in queries)
+
+
+def test_with_a_departure_date_the_slices_partition_that_days_flights(db):
+    queries = [plan_slice(db, None, 3, i, departure_date=BUSY_DAY) for i in range(3)]
+
+    flights = [f for q in queries for f in flights_of(db, q)]
+    assert len(flights) == 8
+    assert {f.departure.tz_convert(UTC).date() for f in flights} == {BUSY_DAY}
+    assert len({(f.flight_id, f.departure) for f in flights}) == 8
+
+
+def test_a_day_with_no_flights_is_an_error_not_an_empty_run(db):
+    with pytest.raises(ValueError, match='no flights depart on 2030-01-01'):
+        plan_slice(db, None, 1, 0, departure_date=date(2030, 1, 1))
+
+
+def test_sampling_applies_within_the_day(db):
+    query = plan_slice(db, 0.5, 1, 0, departure_date=BUSY_DAY)
+
+    assert query.limit == 4
+    assert query.start_date == query.end_date == BUSY_DAY
