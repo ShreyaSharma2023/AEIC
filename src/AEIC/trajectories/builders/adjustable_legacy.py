@@ -131,6 +131,17 @@ def flown_climb_distance(
     return float(distance)
 
 
+APEX_OVERCORRECTION = 3.0
+"""How many times the overshoot the apex's route distance is lowered by when a
+flight with no room for cruise overshoots the destination. The flown distance
+is not a smooth function of the apex altitude (it has steps and dips, and is
+steeper in wind), so correcting by exactly the overshoot oscillates and did not
+converge for about 1% of Embraer ERJ-145 flights. Correcting by more makes the
+next flight land short, and the cruise that then fits absorbs the difference.
+Chosen from a comparison of 1x, 2x, 3x and a damped 0.4x on 500 ERJ-145
+flights: the failure counts were 5, 2, 0 and worse than 1x."""
+
+
 def no_cruise_apex_altitude(
     performance: BasePerformanceModel,
     route_distance: float,
@@ -417,8 +428,9 @@ class AdjustableLegacyContext(Context):
 
         The apex altitude is chosen from estimates made with no wind and at
         fixed masses, so the flown climb and descent can cover more or less
-        ground than it expected. Sizing it for a route `overshoot` shorter
-        makes the next flight cover that much less. Does nothing, returning
+        ground than it expected. Sizing it for a route `APEX_OVERCORRECTION`
+        times `overshoot` shorter makes the next flight land short, and the
+        cruise that then fits brings it onto the destination. Does nothing, returning
         False, if the cruise altitude or descent distance was set explicitly,
         as the apex is then not this context's to change.
 
@@ -427,7 +439,7 @@ class AdjustableLegacyContext(Context):
                 for `no_cruise_apex_altitude`."""
         if not self.apex_is_adjustable:
             return False
-        self.apex_route_distance -= overshoot
+        self.apex_route_distance -= overshoot * APEX_OVERCORRECTION
         self.crz_start_altitude = no_cruise_apex_altitude(
             self.ac_performance,
             self.apex_route_distance,

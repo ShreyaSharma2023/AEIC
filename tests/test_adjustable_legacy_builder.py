@@ -10,6 +10,7 @@ from AEIC.performance.models.legacy import ROCDFilter
 from AEIC.performance.types import AircraftState, SimpleFlightRules
 from AEIC.trajectories import GroundTrack
 from AEIC.trajectories.builders.adjustable_legacy import (
+    APEX_OVERCORRECTION,
     AdjustableLegacyContext,
     flown_descent_distance,
     no_cruise_apex_altitude,
@@ -514,3 +515,48 @@ def test_a_route_with_cruise_is_not_changed_by_the_no_cruise_correction(
 
     assert traj.n_cruise > 1
     assert abs(_miss(traj, mission)) < 1000.0
+
+
+def _apex_context(performance_model, route_distance):
+    """Just the attributes `lower_apex` reads and writes."""
+    from types import SimpleNamespace
+
+    altitude_step = tb.LegacyOptions().altitude_step
+    return SimpleNamespace(
+        apex_is_adjustable=True,
+        apex_route_distance=route_distance,
+        ac_performance=performance_model,
+        clm_start_altitude=3000.0 * FEET_TO_METERS,
+        des_end_altitude=0.0,
+        builder=SimpleNamespace(altitude_step=altitude_step),
+        crz_start_altitude=None,
+        des_start_altitude=None,
+        descent_dist_approx=None,
+    )
+
+
+def test_the_apex_is_sized_for_a_route_well_short_of_the_overshoot(performance_model):
+    """The flown distance is not a smooth function of the apex altitude (it has
+    steps and dips, and is steeper in wind), so correcting by exactly the
+    overshoot oscillates past the destination. Correcting by more makes the
+    next flight land short instead, and the cruise that then fits absorbs the
+    difference, which a change of apex altitude cannot do finely."""
+    ctx = _apex_context(performance_model, route_distance=200_000.0)
+
+    lowered = AdjustableLegacyContext.lower_apex(ctx, 4_000.0)
+
+    assert lowered
+    assert ctx.apex_route_distance == pytest.approx(
+        200_000.0 - 4_000.0 * APEX_OVERCORRECTION
+    )
+    assert APEX_OVERCORRECTION > 1.0
+
+
+def test_a_larger_overshoot_lowers_the_apex_more(performance_model):
+    small = _apex_context(performance_model, 200_000.0)
+    large = _apex_context(performance_model, 200_000.0)
+
+    AdjustableLegacyContext.lower_apex(small, 1_000.0)
+    AdjustableLegacyContext.lower_apex(large, 6_000.0)
+
+    assert large.crz_start_altitude < small.crz_start_altitude
