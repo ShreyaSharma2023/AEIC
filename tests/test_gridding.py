@@ -73,7 +73,9 @@ def _lto_slice_path(path):
     return path.with_name(f'{path.stem}-lto{path.suffix}')
 
 
-def _write_zarr_slice(path, data, *, lto_data=None, grid=None, filter_expr=None):
+def _write_zarr_slice(
+    path, data, *, lto_data=None, grid=None, filter_expr=None, period=None
+):
     """Write trajectory and optional LTO zarr arrays for one map slice.
 
     If *grid* is provided, also writes the ``grid_json`` and ``filter_json``
@@ -86,6 +88,8 @@ def _write_zarr_slice(path, data, *, lto_data=None, grid=None, filter_expr=None)
         arr.attrs['filter_json'] = (
             filter_expr.model_dump_json() if filter_expr is not None else None
         )
+        if period is not None:
+            arr.attrs['period_json'] = json.dumps([d.isoformat() for d in period])
     if lto_data is not None:
         lto_arr = zarr.create_array(
             store=str(_lto_slice_path(path)), dtype='f4', shape=lto_data.shape

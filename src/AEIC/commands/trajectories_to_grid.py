@@ -1,10 +1,11 @@
+import json
 import logging
 import math
 import re
 import time
 import tomllib
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import click
@@ -35,6 +36,7 @@ def map_phase(
     grid: Grid,
     map_output: str,
     filter_expr: Filter | None = None,
+    period: tuple[date, date] | None = None,
 ):
     # Build output array. This assumes that all trajectories have the same set
     # of species, which should be the case if they are all processed with the
@@ -152,6 +154,9 @@ def map_phase(
     traj_save.attrs['grid_json'] = grid.model_dump_json()
     traj_save.attrs['filter_json'] = (
         filter_expr.model_dump_json() if filter_expr is not None else None
+    )
+    traj_save.attrs['period_json'] = (
+        json.dumps([d.isoformat() for d in period]) if period is not None else None
     )
 
 
@@ -294,6 +299,27 @@ def _read_and_validate_zarr_metadata(
     return grid_json, filter_json
 
 
+def _read_period(
+    slice_files: dict[int, Path], indices: list[int]
+) -> tuple[date, date] | None:
+    """The departure period the map slices were made for, None if they were made
+    for every departure. Raises ``click.UsageError`` if slices differ."""
+    periods = set()
+    for i in indices:
+        arr = zarr.open_array(store=str(slice_files[i]), mode='r')
+        periods.add(arr.attrs.get('period_json'))
+    if len(periods) > 1:
+        raise click.UsageError(
+            'Map slices were made for different periods (or some with no period). '
+            'All map slices must use the same --start-date and --end-date.'
+        )
+    (period_json,) = periods
+    if period_json is None:
+        return None
+    start, end = json.loads(period_json)  # type: ignore[arg-type]
+    return date.fromisoformat(start), date.fromisoformat(end)
+
+
 def _accumulate_slices(
     slice_files: dict[int, Path],
     indices: list[int],
@@ -386,7 +412,13 @@ def reduce_phase(
     accum = _accumulate_slices(slice_files, indices, expected_shape)
     lto_accum = _accumulate_slices(lto_slice_files, indices, lto_expected_shape)
 
-    min_ts, _, _ = _query_inventory_time_range(mission_db_file)
+    period = _read_period(slice_files, indices)
+    if period is not None:
+        # Flights are placed in a period by departure, so the period starts at
+        # midnight UTC of its first day whatever the first departure is.
+        min_ts = datetime(*period[0].timetuple()[:3], tzinfo=UTC).timestamp()
+    else:
+        min_ts, _, _ = _query_inventory_time_range(mission_db_file)
 
     OutputGrid(
         grid=grid,
@@ -400,6 +432,7 @@ def reduce_phase(
         traj_repro=traj_repro,
         traj_comments=traj_comments,
         filter_json=filter_json,
+        period=period,
     ).write(output_file)
 
 
@@ -427,6 +460,17 @@ final output NetCDF file."""
     '--filter-file',
     type=click.Path(exists=True, path_type=Path),
     help='Trajectory filter definition file.',
+)
+@click.option(
+    '--start-date',
+    type=click.DateTime(formats=['%Y-%m-%d']),
+    help='Grid only flights departing on or after this day (UTC), YYYY-MM-DD. '
+    'Map mode; needs --end-date and --mission-db-file.',
+)
+@click.option(
+    '--end-date',
+    type=click.DateTime(formats=['%Y-%m-%d']),
+    help='Grid only flights departing on or before this day (UTC), YYYY-MM-DD.',
 )
 @click.option(
     '--grid-file',
@@ -473,6 +517,8 @@ def trajectories_to_grid(
     input_store: Path,
     mission_db_file: Path | None,
     filter_file: Path | None,
+    start_date: datetime | None,
+    end_date: datetime | None,
     grid_file: Path,
     mode: str,
     output_times: str,
@@ -493,6 +539,22 @@ def trajectories_to_grid(
         raise NotImplementedError(
             f'Output time resolution {output_times} is not supported yet.'
         )
+
+    period = None
+    if (start_date is None) != (end_date is None):
+        raise click.UsageError('--start-date and --end-date must be given together.')
+    if start_date is not None and end_date is not None:
+        if mode.lower() != 'map':
+            raise click.UsageError(
+                'The period is set in map mode; reduce reads it from the map slices.'
+            )
+        if mission_db_file is None:
+            raise click.UsageError(
+                'Mission database file must be provided if a period is used.'
+            )
+        if end_date < start_date:
+            raise click.UsageError('--end-date is before --start-date.')
+        period = (start_date.date(), end_date.date())
 
     # Set up filter expression for extracting trajectories from mission
     # database, if provided.
@@ -516,15 +578,17 @@ def trajectories_to_grid(
                 # Map mode: process trajectories in chunks and save intermediate
                 # grid files.
                 # TODO: Make trajectory iterator.
-                nmissions = _count_missions(store, mission_db_file, filter_expr)
+                nmissions = _count_missions(store, mission_db_file, filter_expr, period)
                 limit, offset = _slice_limits(nmissions, slice_count, slice_index)
                 traj_iter = _trajectory_iterator(
-                    store, mission_db_file, filter_expr, limit, offset
+                    store, mission_db_file, filter_expr, limit, offset, period
                 )
                 logger.info('Flights to process in slice: %s', limit)
                 map_output = f'{map_prefix}-{slice_index:05d}'
                 t0 = time.perf_counter()
-                map_phase(limit, species, traj_iter, grid, map_output, filter_expr)
+                map_phase(
+                    limit, species, traj_iter, grid, map_output, filter_expr, period
+                )
                 logger.info('map_phase elapsed: %.3f s', time.perf_counter() - t0)
 
             case 'reduce':
@@ -563,18 +627,22 @@ def trajectories_to_grid(
 
 
 def _count_missions(
-    store: TrajectoryStore, mission_db_file: Path | None, filter_expr: Filter | None
+    store: TrajectoryStore,
+    mission_db_file: Path | None,
+    filter_expr: Filter | None,
+    period: tuple[date, date] | None = None,
 ) -> int:
-    if mission_db_file is None or filter_expr is None:
-        # Without both a mission database and a filter, iteration falls through
-        # to store.iter_range(), so the count must come from the store too.
+    if mission_db_file is None or (filter_expr is None and period is None):
+        # Without both a mission database and a filter or period, iteration
+        # falls through to store.iter_range(), so the count must come from the
+        # store too.
         return len(store)
 
     # Otherwise we need to count the number of missions matching the filter
-    # conditions in the mission database.
-    db = Database(mission_db_file)
-    count_query = CountQuery(filter=filter_expr)
-    nmissions = db(count_query)
+    # and period in the mission database.
+    start, end = period if period is not None else (None, None)
+    with Database(mission_db_file) as db:
+        nmissions = db(CountQuery(filter=filter_expr, start_date=start, end_date=end))
     assert isinstance(nmissions, int)
     return nmissions
 
@@ -594,14 +662,39 @@ def _slice_limits(
     return limit, offset
 
 
+def _flight_ids(
+    mission_db_file: Path,
+    filter_expr: Filter | None,
+    period: tuple[date, date] | None,
+    limit: int,
+    offset: int,
+) -> list[int]:
+    """Ids of the flights in the mission database that match the filter and
+    departed in the period, for one slice of the gridding."""
+    start, end = period if period is not None else (None, None)
+    with Database(mission_db_file) as db:
+        result = db(
+            Query(
+                filter=filter_expr,
+                start_date=start,
+                end_date=end,
+                limit=limit,
+                offset=offset,
+            )
+        )
+        assert isinstance(result, Generator)
+        return [flight.flight_id for flight in result]
+
+
 def _trajectory_iterator(
     store: TrajectoryStore,
     mission_db_file: Path | None,
     filter_expr: Filter | None,
     limit: int,
     offset: int,
+    period: tuple[date, date] | None = None,
 ) -> Generator[Trajectory]:
-    if mission_db_file is None or filter_expr is None:
+    if mission_db_file is None or (filter_expr is None and period is None):
         # If no mission database is provided or there's no query, we can just
         # iterate through the trajectories in the store. Use iter_range so
         # trajectories are loaded in batched slab reads rather than one at a
@@ -609,12 +702,11 @@ def _trajectory_iterator(
         yield from store.iter_range(offset, offset + limit)
     else:
         # Otherwise we need to query the mission database for missions matching
-        # the filter conditions, and then retrieve the corresponding
+        # the filter conditions and period, and then retrieve the corresponding
         # trajectories from the store. Collect all flight IDs up front so we
         # can do a single bulk index lookup and batched slab reads via
-        # iter_flight_ids (instead of per-trajectory get_flight calls).
-        with Database(mission_db_file) as db:
-            result = db(Query(filter=filter_expr, limit=limit, offset=offset))
-            assert isinstance(result, Generator)
-            flight_ids = [flight.flight_id for flight in result]
+        # iter_flight_ids (instead of per-trajectory get_flight calls). Flights
+        # that are not in the store, such as ones that failed to fly, are
+        # skipped.
+        flight_ids = _flight_ids(mission_db_file, filter_expr, period, limit, offset)
         yield from store.iter_flight_ids(flight_ids)

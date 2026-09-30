@@ -29,6 +29,8 @@ invoked with either `--mode map` or `--mode reduce`.
 | `--filter-file` | Path | No | | Trajectory filter definition file (TOML) |
 | `--output-file` | Path | No | | Final NetCDF output path. Required in reduce mode |
 | `--output-times` | `annual`, `monthly`, or `daily` | No | `annual` | Output time resolution. Only `annual` is currently implemented |
+| `--start-date` | `YYYY-MM-DD` | No | | Grid only flights departing on or after this day (UTC). Map mode; needs `--end-date` and `--mission-db-file` |
+| `--end-date` | `YYYY-MM-DD` | No | | Grid only flights departing on or before this day (UTC) |
 | `--slice-count` | Integer | No | `1` | Number of parallel processing slices (map phase only) |
 | `--slice-index` | Integer | No | `0` | Zero-based index of the slice to process (map phase only) |
 
@@ -50,6 +52,29 @@ The `[altitude]` table of a grid file chooses how the vertical axis is binned:
   level or more. The output file has a 72-level `lev` axis (1 = surface) with the model's
   `hyai`, `hybi`, `hyam` and `hybm` coefficients in hPa, in the order GEOS-Chem uses.
   `geoschem-0.5x0.625.toml` is this grid at MERRA2's native horizontal resolution.
+
+### Periods (for example monthly files)
+
+`--output-times` only implements `annual`, but one inventory per month is made by giving each
+map run the month's first and last day:
+
+```shell
+aeic trajectories-to-grid --input-store store.aeic-store --mission-db-file missions.sqlite \
+  --grid-file src/AEIC/data/grids/geoschem-0.5x0.625.toml --mode map \
+  --map-prefix out/2025-03/map --start-date 2025-03-01 --end-date 2025-03-31
+```
+
+The window is of departure dates, both ends inclusive, in UTC. A flight is placed in a period by
+its departure, as the rest of the inventory is, so a flight that crosses midnight at the end of
+the period counts wholly in it. The period is stored with the map slices, and reduce reads it
+from them: it refuses to combine slices made for different periods, sets the output's `time`
+to midnight UTC of the first day, and writes `period_start_utc` and `period_end_utc` as global
+attributes. Without a period, `time` is the earliest departure in the mission database, as
+before.
+
+The mission database is what places flights in a period, so pass the database the trajectories
+were made with. Flights in the database that are not in the store (for example ones that failed
+to fly) are skipped.
 
 ### Map mode
 
