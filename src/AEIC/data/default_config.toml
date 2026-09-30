@@ -4,6 +4,12 @@ performance_model = "performance/sample_performance_model.toml"
 # Engine database spreadsheet.
 engine_file = "engines/sample_edb.xlsx"
 
+# Optional. CSV of smoke numbers by engine UID that replace the engine
+# database's, for engines whose smoke numbers are blank there (SCOPE11 needs one
+# at every mode). Columns: uid, sn_idle, sn_app, sn_co, sn_to; other columns are
+# ignored. The engine keeps its own fuel flow and gaseous emission indices.
+# sn_override_file = "engine_sn_overrides.csv"
+
 
 [weather]
 
