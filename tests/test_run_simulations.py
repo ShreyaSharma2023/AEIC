@@ -70,5 +70,6 @@ def test_the_options_are_on_the_command_line():
         '--iterate-mass',
         '--no-iterate-mass',
         '--descent-distance-from-model',
+        '--load-factor-file',
     ):
         assert option in result.output
