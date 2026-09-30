@@ -146,15 +146,60 @@ def test_min_and_max_mass_are_exposed():
     assert interpolator.max_mass == 60000.0
 
 
-def test_a_mach_outside_the_range_of_a_cell_that_is_needed_is_rejected():
+def test_a_mach_well_outside_the_range_of_a_cell_that_is_needed_is_rejected():
     """Rows PIANO prints as '...' (a speed the aircraft cannot sustain there)
     are absent, so a needed cell can stop short of the requested Mach. Its
-    nearest value is a different speed, so it must not be used silently."""
+    nearest value is then a different speed, and must not be used silently."""
     table = _sweep_table(drop={(400, 60000.0, 0.90)})
     with pytest.raises(
         ValueError, match=r'no cruise data at Mach 0\.850.*0\.700-0\.800'
     ):
         MachSweepInterpolator(table)(390, 59000.0, 0.85)
+
+
+@pytest.mark.parametrize(
+    ('dropped', 'mach', 'edge'), [(0.70, 0.795, 0.80), (0.90, 0.805, 0.80)]
+)
+def test_a_mach_just_outside_a_cells_range_uses_the_nearest_tabulated_mach(
+    dropped, mach, edge
+):
+    """A heavy aircraft at a low flight level cannot fly slower than the lowest
+    speed PIANO tabulates, and the flight's speed schedule can ask for a Mach
+    a hair below it. The nearest tabulated speed is then the right answer, not
+    an error."""
+    table = _sweep_table(drop={(400, 60000.0, dropped)})
+    interpolator = MachSweepInterpolator(table)
+
+    perf = interpolator(400, 60000.0, mach)
+    at_edge = interpolator(400, 60000.0, edge)
+
+    assert perf.fuel_flow == pytest.approx(at_edge.fuel_flow)
+    assert perf.true_airspeed == pytest.approx(at_edge.true_airspeed)
+
+
+def test_using_the_nearest_mach_is_logged_once_per_cell(caplog):
+    table = _sweep_table(drop={(400, 60000.0, 0.70)})
+    interpolator = MachSweepInterpolator(table)
+
+    with caplog.at_level('WARNING'):
+        for _ in range(5):
+            interpolator(400, 60000.0, 0.79)
+
+    messages = [
+        r.message for r in caplog.records if 'nearest tabulated Mach' in r.message
+    ]
+    assert len(messages) == 1
+    assert 'FL 400' in messages[0] and '0.800' in messages[0]
+
+
+def test_the_largest_gap_that_is_bridged_can_be_set():
+    table = _sweep_table(drop={(400, 60000.0, 0.90)})
+
+    wide = MachSweepInterpolator(table, max_mach_gap=0.06)(400, 60000.0, 0.85)
+    assert wide.true_airspeed == pytest.approx(200.0 + 100 * 0.80)
+
+    with pytest.raises(ValueError, match='no cruise data at Mach 0.850'):
+        MachSweepInterpolator(table, max_mach_gap=0.0)(400, 60000.0, 0.85)
 
 
 def test_a_cell_with_no_weight_is_not_consulted():
