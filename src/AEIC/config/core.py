@@ -58,6 +58,11 @@ class Config(CIBaseModel):
     engine_file: Path
     """Path to engine database file."""
 
+    sn_override_file: Path | None = None
+    """Optional CSV of smoke numbers by engine UID that replace the engine
+    database's, for engines whose smoke numbers are blank there. See
+    `AEIC.performance.sn_overrides`."""
+
     weather: WeatherConfig
     """Global weather configuration settings."""
 
@@ -110,6 +115,17 @@ class Config(CIBaseModel):
                 Path(
                     self.file_location(
                         getattr(self, 'engine_file'), slack=_config_singleton_escaped
+                    )
+                ).resolve(),
+            )
+        if getattr(self, 'sn_override_file') is not None:
+            object.__setattr__(
+                self,
+                'sn_override_file',
+                Path(
+                    self.file_location(
+                        getattr(self, 'sn_override_file'),
+                        slack=_config_singleton_escaped,
                     )
                 ).resolve(),
             )

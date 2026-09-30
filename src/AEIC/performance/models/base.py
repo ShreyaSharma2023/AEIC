@@ -10,6 +10,7 @@ from pydantic import ConfigDict, PositiveInt, model_validator
 from AEIC.config import config
 from AEIC.performance.apu import APU, find_apu
 from AEIC.performance.edb import EDBEntry
+from AEIC.performance.sn_overrides import apply_sn_override, read_sn_overrides
 from AEIC.performance.types import (
     LTOPerformance,
     SimpleFlightRules,
@@ -208,9 +209,14 @@ class BasePerformanceModel[RulesT](CIBaseModel, ABC):
             )
         # An engine with no nvPM measurements is not an error: the emissions
         # calculation then estimates nvPM from its smoke number (SCOPE11).
-        return EDBEntry.get_engine(
+        entry = EDBEntry.get_engine(
             config.engine_file, self.lto_performance.ICAO_UID, strict=False
         )
+        # Engines whose smoke numbers are blank in the EDB can have them
+        # supplied from a file.
+        if config.sn_override_file is not None:
+            entry = apply_sn_override(entry, read_sn_overrides(config.sn_override_file))
+        return entry
 
     @property
     def apu(self) -> APU | None:
