@@ -8,8 +8,10 @@ table may have further columns (such as the basis of each figure), which are
 ignored.
 
 A flight uses the row of its origin country and the month of its departure.
-It uses the domestic column if its origin and destination countries are the
-same and the international column otherwise. The year of the flight is
+Each row's ``domestic_load_factor_basis`` names the group the domestic figure
+covers (``total_europe``, ``domestic_australia``, ...). A flight whose origin and
+destination countries have the same basis is domestic and takes the domestic
+column; otherwise it takes the international one. The year of the flight is
 ignored: the table's years are not the simulated year's. Where the table has
 several years for one country and month, the latest is used.
 """
@@ -28,6 +30,7 @@ REQUIRED_COLUMNS = (
     'year',
     'month',
     'domestic_load_factor',
+    'domestic_load_factor_basis',
     'international_load_factor',
 )
 
@@ -47,9 +50,9 @@ def _percent(row: dict[str, str], column: str, path: Path) -> float:
 class LoadFactorTable:
     """Load factors by country and month, as fractions between 0 and 1."""
 
-    def __init__(self, factors: dict[tuple[str, int], tuple[float, float]]):
+    def __init__(self, factors: dict[tuple[str, int], tuple[float, float, str]]):
         self._factors = factors
-        """(country, month) -> (domestic, international)."""
+        """(country, month) -> (domestic, international, domestic basis)."""
 
     @classmethod
     def load(cls, path: str | Path) -> LoadFactorTable:
@@ -61,7 +64,7 @@ class LoadFactorTable:
         """
         path = Path(path)
         latest: dict[tuple[str, int], int] = {}
-        factors: dict[tuple[str, int], tuple[float, float]] = {}
+        factors: dict[tuple[str, int], tuple[float, float, str]] = {}
         with open(path, newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             missing = [
@@ -76,7 +79,11 @@ class LoadFactorTable:
                 year = int(row['year'])
                 if year >= latest.get(key, year):
                     latest[key] = year
-                    factors[key] = (domestic, international)
+                    factors[key] = (
+                        domestic,
+                        international,
+                        row['domestic_load_factor_basis'].strip(),
+                    )
         return cls(factors)
 
     def load_factor(self, mission: Mission) -> float:
@@ -84,7 +91,7 @@ class LoadFactorTable:
 
         Raises:
             ValueError: If the mission has no origin or destination country, or
-                the table has no row for its origin country and month.
+                the table has no row for either country in its month.
         """
         if mission.origin_country is None:
             raise ValueError(
@@ -96,16 +103,21 @@ class LoadFactorTable:
                 'an international one'
             )
         month = mission.departure.month
+        domestic, international, basis = self._row(
+            mission.origin_country, month, 'origin'
+        )
+        _, _, destination_basis = self._row(
+            mission.destination_country, month, 'destination'
+        )
+        return domestic if basis == destination_basis else international
+
+    def _row(self, country: str, month: int, role: str) -> tuple[float, float, str]:
         try:
-            domestic, international = self._factors[(mission.origin_country, month)]
+            return self._factors[(country, month)]
         except KeyError:
             raise ValueError(
-                f'no load factor for origin country {mission.origin_country}, '
-                f'month {month}'
+                f'no load factor for {role} country {country}, month {month}'
             ) from None
-        if mission.origin_country == mission.destination_country:
-            return domestic
-        return international
 
     def apply(self, mission: Mission) -> Mission:
         """A copy of the mission with its load factor taken from the table.

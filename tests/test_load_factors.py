@@ -39,6 +39,8 @@ ROWS = (
     'US,23,3,85.0,total_north_america,80.0,international_north_america',
     'US,23,4,70.0,total_north_america,60.0,international_north_america',
     'DE,23,3,75.0,total_europe,90.0,international_europe',
+    'FR,23,3,72.0,total_europe,88.0,international_europe',
+    'CA,23,3,78.0,total_north_america,66.0,international_north_america',
 )
 
 
@@ -48,10 +50,18 @@ def test_a_domestic_flight_uses_the_domestic_column_as_a_fraction(tmp_path):
     assert table.load_factor(mission('US', 'US')) == pytest.approx(0.85)
 
 
-def test_an_international_flight_uses_the_origin_countrys_international_column(
-    tmp_path,
-):
-    """Not the destination's: DE would give 0.90."""
+def test_a_flight_between_countries_of_one_basis_is_domestic(tmp_path):
+    """DE and FR are both in the table's total_europe basis, so a flight between
+    them is domestic and takes the origin's domestic figure, as US to CA does."""
+    table = LoadFactorTable.load(table_file(tmp_path, *ROWS))
+
+    assert table.load_factor(mission('DE', 'FR')) == pytest.approx(0.75)
+    assert table.load_factor(mission('US', 'CA')) == pytest.approx(0.85)
+
+
+def test_a_flight_between_countries_of_different_bases_is_international(tmp_path):
+    """Uses the origin's international column, not the destination's: DE would
+    give 0.90."""
     table = LoadFactorTable.load(table_file(tmp_path, *ROWS))
 
     assert table.load_factor(mission('US', 'DE')) == pytest.approx(0.80)
@@ -93,8 +103,10 @@ def test_where_a_month_has_several_years_the_latest_is_used(tmp_path):
 def test_a_country_or_month_missing_from_the_table_is_an_error(tmp_path):
     table = LoadFactorTable.load(table_file(tmp_path, *ROWS))
 
-    with pytest.raises(ValueError, match='FR.*month 3'):
-        table.load_factor(mission('FR', 'FR'))
+    with pytest.raises(ValueError, match='IT.*month 3'):
+        table.load_factor(mission('IT', 'IT'))
+    with pytest.raises(ValueError, match='destination country IT.*month 3'):
+        table.load_factor(mission('US', 'IT'))
     with pytest.raises(ValueError, match='DE.*month 4'):
         table.load_factor(mission('DE', 'DE', '2025-04-10 12:00'))
 
@@ -152,5 +164,5 @@ def test_applying_the_table_replaces_the_missions_load_factor(tmp_path):
 def test_applying_the_table_to_a_mission_it_has_no_row_for_is_an_error(tmp_path):
     table = LoadFactorTable.load(table_file(tmp_path, *ROWS))
 
-    with pytest.raises(ValueError, match='FR'):
-        table.apply(mission('FR', 'FR'))
+    with pytest.raises(ValueError, match='IT'):
+        table.apply(mission('IT', 'IT'))
