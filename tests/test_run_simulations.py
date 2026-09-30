@@ -80,6 +80,7 @@ def test_the_options_are_on_the_command_line():
         '--load-factor-file',
         '--departure-date',
         '--model-cache-size',
+        '--filter-file',
     ):
         assert option in result.output
 

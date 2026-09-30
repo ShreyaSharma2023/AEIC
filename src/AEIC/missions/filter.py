@@ -108,6 +108,13 @@ class Filter(CIBaseModel):
     aircraft_type: str | list[str] | None = None
     """Aircraft type(s) (e.g., '737', '320')."""
 
+    performance_model_key: str | list[str] | None = None
+    """Keep only flights with these performance model key(s), which name an
+    airframe and engine variant (e.g., 'B738_01P11CM121')."""
+    exclude_performance_model_key: str | list[str] | None = None
+    """Drop flights with these performance model key(s). Flights with no key
+    are kept."""
+
     def to_sql(self, table: str | None = None) -> tuple[str, list]:
         """Convert the filter to SQL conditions and parameters.
 
@@ -147,6 +154,25 @@ class Filter(CIBaseModel):
             placeholders = ', '.join('?' * len(self.aircraft_type))
             conditions.append(
                 (f'{table}aircraft_type IN ({placeholders})', self.aircraft_type)
+            )
+
+        if self.performance_model_key is not None:
+            placeholders = ', '.join('?' * len(self.performance_model_key))
+            conditions.append(
+                (
+                    f'{table}performance_model_key IN ({placeholders})',
+                    self.performance_model_key,
+                )
+            )
+        if self.exclude_performance_model_key is not None:
+            # NOT IN alone would also drop flights whose key is NULL.
+            placeholders = ', '.join('?' * len(self.exclude_performance_model_key))
+            conditions.append(
+                (
+                    f'({table}performance_model_key IS NULL OR '
+                    f'{table}performance_model_key NOT IN ({placeholders}))',
+                    self.exclude_performance_model_key,
+                )
             )
 
         # Complex filters involving sub-selects.
@@ -374,6 +400,8 @@ class Filter(CIBaseModel):
             'destination_continent',
             'service_type',
             'aircraft_type',
+            'performance_model_key',
+            'exclude_performance_model_key',
         ]:
             if isinstance(getattr(self, attr), str):
                 setattr(self, attr, [getattr(self, attr)])
