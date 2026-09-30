@@ -9,6 +9,7 @@ import AEIC.trajectories.builders as tb
 from AEIC.config import Config, config
 from AEIC.emissions import compute_emissions
 from AEIC.missions import CountQuery, Database, Query
+from AEIC.missions.load_factors import LoadFactorTable
 from AEIC.performance.model_selector import (
     PerformanceModelSelector,
     SimplePerformanceModelSelector,
@@ -73,6 +74,7 @@ def simulate_slice(
     performance_model: BasePerformanceModel | PerformanceModelSelector,
     fuel: Fuel,
     builder: tb.Builder,
+    load_factors: LoadFactorTable | None = None,
 ):
     # There is one output file per slice. We'll merge them into a merged
     # trajectory store when we're done.
@@ -96,6 +98,8 @@ def simulate_slice(
             for mission in db(q):  # type: ignore
                 # Fly the mission, catching exceptions.
                 try:
+                    if load_factors is not None:
+                        mission = load_factors.apply(mission)
                     pm = performance_model
                     if isinstance(performance_model, PerformanceModelSelector):
                         pm = performance_model(mission)
@@ -219,6 +223,14 @@ def simulate_slice(
     help='Iterate the descent-distance estimate that decides where cruise ends '
     'until it matches the ground distance actually flown during descent.',
 )
+@click.option(
+    '--load-factor-file',
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help='CSV of load factors by country and month. Without it every flight has '
+    'a load factor of 1.0. A flight whose origin country and month are not in '
+    'the table fails.',
+)
 def run_simulations(
     config_file: Path,
     performance_selector_dir: Path | None,
@@ -233,6 +245,7 @@ def run_simulations(
     iterate_mass: bool,
     descent_distance_from_model: bool,
     iterate_ground_distance: bool,
+    load_factor_file: Path | None,
 ):
     if performance_selector_dir is None == performance_model_file is None:
         raise click.UsageError(
@@ -309,4 +322,5 @@ def run_simulations(
             performance_model,
             fuel,
             builder,
+            LoadFactorTable.load(load_factor_file) if load_factor_file else None,
         )
