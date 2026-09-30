@@ -1,6 +1,7 @@
 import logging
 import math
 import tomllib
+from datetime import date, datetime
 from pathlib import Path
 
 import click
@@ -63,12 +64,57 @@ def make_trajectory_builder(
             raise ValueError(f'Unknown trajectory builder: {builder!r}')
 
 
+def plan_slice(
+    db: Database,
+    sample: float | None,
+    slice_count: int,
+    slice_index: int,
+    departure_date: date | None = None,
+) -> Query:
+    """The query for the flights of one slice of a run.
+
+    The flights (of the given departure day, if there is one) are split into
+    `slice_count` groups of about equal size in departure order, and the query is
+    for group `slice_index`. The last group is shortened to fit.
+
+    Raises:
+        ValueError: If no flights match. An empty run is far more likely a wrong
+            date than an intended result.
+    """
+    nflights = db(CountQuery(start_date=departure_date, end_date=departure_date))
+    assert isinstance(nflights, int)
+    if nflights == 0:
+        raise ValueError(
+            'no flights in the mission database'
+            if departure_date is None
+            else f'no flights depart on {departure_date}'
+        )
+    logger.info('Total flights to process: %s', nflights)
+    if sample is not None:
+        nflights = math.ceil(nflights * sample)
+        logger.info('Sampling enabled: %s flights to process after sampling.', nflights)
+
+    # Limit and offset values to use based on slice information. These are used
+    # directly in the LIMIT and OFFSET clauses in an SQL query.
+    limit = math.ceil(nflights / slice_count)
+    offset = limit * slice_index
+    if slice_index == slice_count - 1:
+        limit = min(limit, nflights - offset)
+    logger.info('Flights to process in slice: %s', limit)
+    return Query(
+        limit=limit,
+        offset=offset,
+        sample=sample,
+        start_date=departure_date,
+        end_date=departure_date,
+    )
+
+
 def simulate_slice(
     slice_idx: int,
     sample: float | None,
     seed: int | None,
-    limit: int,
-    offset: int,
+    query: Query,
     output_store: Path,
     mission_db_file: Path,
     performance_model: BasePerformanceModel | PerformanceModelSelector,
@@ -93,9 +139,8 @@ def simulate_slice(
             nfailed = 0
 
             # Retrieve all flights in this slice and simulate them one by one.
-            q = Query(limit=limit, offset=offset, sample=sample)
-            p = Progress(total=limit, desc='Flights')
-            for mission in db(q):  # type: ignore
+            p = Progress(total=query.limit, desc='Flights')
+            for mission in db(query):  # type: ignore
                 # Fly the mission, catching exceptions.
                 try:
                     if load_factors is not None:
@@ -231,6 +276,13 @@ def simulate_slice(
     'a load factor of 1.0. A flight whose origin country and month are not in '
     'the table fails.',
 )
+@click.option(
+    '--departure-date',
+    type=click.DateTime(formats=['%Y-%m-%d']),
+    default=None,
+    help='Fly only the flights departing on this day (UTC), YYYY-MM-DD. The '
+    'slices then split that day\'s flights.',
+)
 def run_simulations(
     config_file: Path,
     performance_selector_dir: Path | None,
@@ -246,6 +298,7 @@ def run_simulations(
     descent_distance_from_model: bool,
     iterate_ground_distance: bool,
     load_factor_file: Path | None,
+    departure_date: datetime | None,
 ):
     if performance_selector_dir is None == performance_model_file is None:
         raise click.UsageError(
@@ -266,27 +319,17 @@ def run_simulations(
         # Load given configuration file.
         Config.load(config_file)
 
-        # Count flights to be simulated. We do this once to decide how many
-        # flights to run in this slice.
         with Database(mission_db_file) as db:
-            nflights = db(CountQuery())
-        assert isinstance(nflights, int)
-        logger.info('Total flights to process: %s', nflights)
-        if sample is not None:
-            nflights = math.ceil(nflights * sample)
-            logger.info(
-                'Sampling enabled: %s flights to process after sampling.', nflights
-            )
-
-        # Limit and offset values to use based on slice information. These are
-        # used directly in the LIMIT and OFFSET clauses in an SQL query. This
-        # splits the query results into more or less equally sized groups. The
-        # limit for the last slice is adjusted to fit the number of flights.
-        limit = math.ceil(nflights / slice_count)
-        offset = limit * slice_index
-        if slice_index == slice_count - 1:
-            limit = min(limit, nflights - offset)
-        logger.info('Flights to process in slice: %s', limit)
+            try:
+                query = plan_slice(
+                    db,
+                    sample,
+                    slice_count,
+                    slice_index,
+                    departure_date.date() if departure_date else None,
+                )
+            except ValueError as exc:
+                raise click.UsageError(str(exc)) from exc
 
         # Load single performance model to use for all simulations.
         if performance_selector_dir is not None:
@@ -315,8 +358,7 @@ def run_simulations(
             slice_index,
             sample,
             seed,
-            limit,
-            offset,
+            query,
             output_store,
             mission_db_file,
             performance_model,
