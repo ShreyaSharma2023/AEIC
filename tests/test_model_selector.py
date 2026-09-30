@@ -6,6 +6,7 @@ import pandas as pd
 
 from AEIC.missions.mission import Mission
 from AEIC.performance.model_selector import SimplePerformanceModelSelector
+from AEIC.performance.models import PerformanceModel
 
 # Path to an existing valid performance model TOML to copy into test directories.
 _REAL_PERF_MODEL_TOML = (
@@ -106,3 +107,33 @@ def test_selector_performance_model_key_synonym(tmp_path):
     assert 'B738_CFM56' in selector._cache
     assert result is selector._cache['B738_CFM56']
     assert result is not selector.default_pm
+
+
+def test_a_cache_as_large_as_the_model_set_loads_each_model_once(tmp_path, monkeypatch):
+    """A run flies flights of hundreds of models in departure order, so a cache
+    smaller than the set reloads models over and over."""
+    names = ['m1', 'm2', 'm3', 'm4']
+    perf_dir = _make_selector_dir(tmp_path, '', names)
+    loads = []
+    real_load = PerformanceModel.load
+
+    def counting_load(path):
+        loads.append(path)
+        return real_load(path)
+
+    monkeypatch.setattr(PerformanceModel, 'load', staticmethod(counting_load))
+
+    selector = SimplePerformanceModelSelector(perf_dir, cache_size=4)
+    for _ in range(3):
+        for name in names:
+            selector(_make_mission(aircraft_type='B738', performance_model_key=name))
+
+    assert len(loads) == 4
+
+    loads.clear()
+    small = SimplePerformanceModelSelector(perf_dir, cache_size=2)
+    for _ in range(3):
+        for name in names:
+            small(_make_mission(aircraft_type='B738', performance_model_key=name))
+
+    assert len(loads) == 12  # round robin over a smaller cache misses every time

@@ -79,6 +79,7 @@ def test_the_options_are_on_the_command_line():
         '--descent-distance-from-model',
         '--load-factor-file',
         '--departure-date',
+        '--model-cache-size',
     ):
         assert option in result.output
 

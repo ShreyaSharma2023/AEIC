@@ -283,6 +283,15 @@ def simulate_slice(
     help='Fly only the flights departing on this day (UTC), YYYY-MM-DD. The '
     'slices then split that day\'s flights.',
 )
+@click.option(
+    '--model-cache-size',
+    type=click.IntRange(min=1),
+    default=16,
+    show_default=True,
+    help='Performance models kept in memory when using --performance-selector-dir. '
+    'A run over hundreds of models flying in departure order should hold them all, '
+    'or every flight reloads its model.',
+)
 def run_simulations(
     config_file: Path,
     performance_selector_dir: Path | None,
@@ -299,6 +308,7 @@ def run_simulations(
     iterate_ground_distance: bool,
     load_factor_file: Path | None,
     departure_date: datetime | None,
+    model_cache_size: int,
 ):
     if performance_selector_dir is None == performance_model_file is None:
         raise click.UsageError(
@@ -333,7 +343,9 @@ def run_simulations(
 
         # Load single performance model to use for all simulations.
         if performance_selector_dir is not None:
-            performance_model = SimplePerformanceModelSelector(performance_selector_dir)
+            performance_model = SimplePerformanceModelSelector(
+                performance_selector_dir, cache_size=model_cache_size
+            )
         else:
             assert performance_model_file is not None
             performance_model = PerformanceModel.load(performance_model_file)
