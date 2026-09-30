@@ -8,7 +8,13 @@ from pathlib import Path
 import netCDF4 as nc4
 import numpy as np
 
-from AEIC.gridding.grid import Grid, HeightGrid, ISAPressureGrid
+from AEIC.gridding.grid import (
+    PRESSURE_GRIDS,
+    GEOSChemGrid,
+    Grid,
+    HeightGrid,
+    ISAPressureGrid,
+)
 from AEIC.storage.reproducibility import (
     GIT_BRANCH,
     GIT_COMMIT,
@@ -17,6 +23,7 @@ from AEIC.storage.reproducibility import (
     ReproducibilityData,
 )
 from AEIC.types import Species
+from AEIC.utils.geos_levels import AP_HPA, BP
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +136,44 @@ class OutputGrid:
                 # Levels stored in descending order (ERA5 convention).
                 pl_var[:] = np.sort(alt.levels)[::-1]
                 vert_dim = 'pressure_level'
+            elif isinstance(alt, GEOSChemGrid):
+                # The model's own level axis, surface first, with its hybrid
+                # coefficients (in hPa), so a model can read the levels as they
+                # are. The levels were taken at one standard surface pressure.
+                ds.createDimension('lev', alt.bins)
+                ds.createDimension('ilev', alt.bins + 1)
+                lev_var = ds.createVariable('lev', 'i4', ('lev',))
+                lev_var.long_name = 'GEOS-Chem hybrid level (1 = surface)'
+                lev_var.units = 'level'
+                lev_var.positive = 'up'
+                lev_var.comment = (
+                    'Layer pressure edges are hyai + hybi * PS, taken at a standard '
+                    f'surface pressure PS of {alt.surface_pressure:g} hPa everywhere.'
+                )
+                lev_var[:] = np.arange(1, alt.bins + 1)
+                for name, dim, values, units, what in (
+                    ('hyai', 'ilev', AP_HPA, 'hPa', 'A coefficient at layer edges'),
+                    ('hybi', 'ilev', BP, '1', 'B coefficient at layer edges'),
+                    (
+                        'hyam',
+                        'lev',
+                        0.5 * (AP_HPA[:-1] + AP_HPA[1:]),
+                        'hPa',
+                        'A coefficient at layer midpoints',
+                    ),
+                    (
+                        'hybm',
+                        'lev',
+                        0.5 * (BP[:-1] + BP[1:]),
+                        '1',
+                        'B coefficient at layer midpoints',
+                    ),
+                ):
+                    var = ds.createVariable(name, 'f8', (dim,))
+                    var.units = units
+                    var.long_name = f'hybrid {what}'
+                    var[:] = values
+                vert_dim = 'lev'
             else:
                 raise NotImplementedError(
                     f'Unsupported altitude grid type: {type(alt).__name__}.'
@@ -152,7 +197,7 @@ class OutputGrid:
                 var.units = 'g'
                 var.description = f'Gridded {sp.name} emissions'
                 slab = self.accum[..., i].transpose(2, 0, 1)
-                if isinstance(alt, ISAPressureGrid):
+                if isinstance(alt, PRESSURE_GRIDS):
                     slab = slab[::-1, :, :]
                 var[0, :, :, :] = slab
 

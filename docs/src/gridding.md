@@ -32,6 +32,25 @@ invoked with either `--mode map` or `--mode reduce`.
 | `--slice-count` | Integer | No | `1` | Number of parallel processing slices (map phase only) |
 | `--slice-index` | Integer | No | `0` | Zero-based index of the slice to process (map phase only) |
 
+### Vertical grids
+
+The `[altitude]` table of a grid file chooses how the vertical axis is binned:
+
+- `mode = "height"`: regular bins in metres (`resolution`, `range`).
+- `mode = "isa_pressure"`: bins around a list of pressure `levels` in hPa, binned by the
+  ISA pressure of each trajectory point. The bundled `era5.toml` has 12 levels from 100 to
+  500 hPa only. The vertical index of a point outside the range of a vertical grid is clamped to the
+  first or last bin, so that grid puts emissions below 500 hPa in the 500 hPa bin. Use it only for
+  cruise-level work.
+- `mode = "geoschem_72"`: the 72 terrain-following hybrid sigma-pressure levels of
+  GEOS-Chem and MERRA2, with pressure edges `Ap + Bp * PS` from the model's published
+  coefficients. Trajectories carry no local surface pressure, so the levels are taken at one
+  standard `surface_pressure` (default 1013.25 hPa) everywhere: that is the model's own
+  levels well above the boundary layer, and near the ground over high terrain it is off by a
+  level or more. The output file has a 72-level `lev` axis (1 = surface) with the model's
+  `hyai`, `hybi`, `hyam` and `hybm` coefficients in hPa, in the order GEOS-Chem uses.
+  `geoschem-0.5x0.625.toml` is this grid at MERRA2's native horizontal resolution.
+
 ### Map mode
 
 Map mode (`--mode map`) processes a subset of trajectories from the input store

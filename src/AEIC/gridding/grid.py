@@ -9,6 +9,7 @@ import numpy as np
 from pydantic import Field
 
 from AEIC.types import SpeciesValues
+from AEIC.utils.geos_levels import N_LEVELS, edge_pressures_hpa, mid_pressures_hpa
 from AEIC.utils.models import CIBaseModel
 
 
@@ -102,7 +103,56 @@ class ISAPressureGrid(CIBaseModel):
         return _edges_from_levels(np.sort(self.levels))
 
 
-AltitudeGrid = Annotated[HeightGrid | ISAPressureGrid, Field(discriminator='mode')]
+class GEOSChemGrid(CIBaseModel):
+    """The 72 levels of GEOS-Chem and MERRA2's terrain-following hybrid
+    sigma-pressure grid, at one standard surface pressure.
+
+    The pressure at the edges of level L is Ap(L) + Bp(L) * PS, with the
+    model's published Ap and Bp, so a level is at a different pressure in every
+    column. A trajectory carries no local surface pressure, so the levels are
+    taken at `surface_pressure` everywhere: well above the boundary layer that
+    is the model's own levels, and near the ground over high terrain it is off by
+    a level or more.
+
+    Like the ISA pressure grid, flights are binned by ISA pressure, and the
+    bins are in ascending pressure order.
+    """
+
+    mode: Literal['geoschem_72']
+
+    surface_pressure: float = 1013.25
+    """Surface pressure [hPa] the levels are taken at."""
+
+    @property
+    def bins(self) -> int:
+        return N_LEVELS
+
+    @property
+    def bottom(self) -> float:
+        return self.surface_pressure
+
+    @property
+    def top(self) -> float:
+        return float(self.edges[0])
+
+    @property
+    def levels(self) -> np.ndarray:
+        """Layer mid pressures [hPa], the surface layer first."""
+        return mid_pressures_hpa(np.float64(self.surface_pressure))
+
+    @property
+    def edges(self) -> np.ndarray:
+        """N+1 layer edge pressures [hPa] in ascending order, the model top
+        first and the surface last, as the kernel bins them."""
+        return np.sort(edge_pressures_hpa(np.float64(self.surface_pressure)))
+
+
+AltitudeGrid = Annotated[
+    HeightGrid | ISAPressureGrid | GEOSChemGrid, Field(discriminator='mode')
+]
+
+PRESSURE_GRIDS = (ISAPressureGrid, GEOSChemGrid)
+"""Vertical grids that bin by pressure, in ascending order, not by height."""
 
 
 class TrajectoryLike(Protocol):

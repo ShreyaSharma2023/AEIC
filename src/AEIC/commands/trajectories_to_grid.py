@@ -11,7 +11,7 @@ import click
 import numpy as np
 import zarr
 
-from AEIC.gridding.grid import Grid, ISAPressureGrid
+from AEIC.gridding.grid import PRESSURE_GRIDS, Grid
 from AEIC.gridding.kernels import process_segments_nonuniform_z
 from AEIC.gridding.output import OutputGrid
 from AEIC.missions import CountQuery, Database, Filter, Query, TimeRangeQuery
@@ -58,7 +58,7 @@ def map_phase(
 
     # Get vertical grid edges.
     z_edges = grid.altitude.edges
-    use_pressure = isinstance(grid.altitude, ISAPressureGrid)
+    use_pressure = isinstance(grid.altitude, PRESSURE_GRIDS)
 
     # Number of segments currently accumulated in the arrays.
     nsegs = 0
