@@ -227,15 +227,37 @@ def convert_day(
     )
 
 
+WIND_PACKING_STEP_MS = 0.01
+"""Resolution of the stored winds [m/s]. They are packed as 16-bit integers of
+this size: half the space of float32, with an error of at most half a step."""
+
+_PACKED_LIMIT_MS = 32767 * WIND_PACKING_STEP_MS
+"""Largest wind the packing holds; -32768 is kept as the fill value."""
+
+
 def write_day(dataset: xr.Dataset, path: Path) -> None:
     """Write a converted day, one hour per chunk so that reading an hour reads
     only that hour, through a temporary file so an interrupted job leaves no
-    half-written day behind."""
+    half-written day behind.
+
+    Raises:
+        ValueError: If a wind is beyond what the 16-bit packing holds. Clipping
+            it would turn a wrong wind into a plausible one.
+    """
+    for name in ('u', 'v'):
+        peak = float(np.abs(dataset[name].values).max())
+        if peak > _PACKED_LIMIT_MS:
+            raise ValueError(
+                f'{name}: wind of {peak:g} m/s is beyond the ±{_PACKED_LIMIT_MS:g} '
+                'm/s that the packing can hold'
+            )
     n = dataset.sizes
     chunks = (1, n['pressure_level'], n['latitude'], n['longitude'])
     encoding = {
         name: {
-            'dtype': 'float32',
+            'dtype': 'int16',
+            'scale_factor': WIND_PACKING_STEP_MS,
+            '_FillValue': -32768,
             'chunksizes': chunks,
             'zlib': True,
             'complevel': 1,
