@@ -1,3 +1,5 @@
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -428,3 +430,87 @@ def test_no_cruise_apex_altitude_raises_when_even_a_bare_climb_and_descent_do_no
             descent_end_altitude=0.0,
             altitude_step=tb.LegacyOptions().altitude_step,
         )
+
+
+###########################################
+######   Ground-distance iteration   ######
+######   on a route with no cruise   ######
+###########################################
+
+
+class SlowerRealClimb:
+    """A performance model whose flown climb is slower than the climb the
+    builder estimates beforehand.
+
+    The estimates (`flown_climb_distance` and `flown_descent_distance`) ask for
+    the model at a named mass, 'max' or 'min', while the flight asks at its own
+    mass in kilograms. PIANO models, and any flight in wind, differ between the
+    two, so the real climb covers more ground than the estimate said."""
+
+    def __init__(self, inner, rate_of_climb_factor):
+        self._inner = inner
+        self._factor = rate_of_climb_factor
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def evaluate(self, state, rules):
+        perf = self._inner.evaluate(state, rules)
+        if rules == SimpleFlightRules.CLIMB and not isinstance(
+            state.aircraft_mass, str
+        ):
+            perf = dataclasses.replace(
+                perf, rate_of_climb=perf.rate_of_climb * self._factor
+            )
+        return perf
+
+
+@pytest.mark.parametrize('destination', ['PVD', 'BDL'])
+def test_iterating_on_the_ground_distance_lands_a_route_with_no_cruise(
+    performance_model, destination
+):
+    """The route is too short to cruise, so the descent estimate no longer says
+    where cruise ends and feeding the flown descent back in changes nothing: the
+    flight overshoots by the same distance every iteration and the loop used to
+    give up. The apex altitude has to come down instead."""
+    mission = _mission('BOS', destination)
+    slower = SlowerRealClimb(performance_model, 0.7)
+
+    traj = tb.AdjustableLegacyBuilder(
+        options=tb.Options(iterate_mass=False, iterate_ground_distance=True)
+    ).fly(slower, mission)
+
+    assert traj.n_cruise <= 1
+    assert abs(_miss(traj, mission)) < 1000.0
+
+
+def test_an_explicit_cruise_altitude_is_left_alone_by_the_no_cruise_correction(
+    performance_model,
+):
+    """An explicit cruise altitude was asked for, so ground-distance iteration
+    must not quietly replace it with an apex; the flight fails to converge as it
+    always did."""
+    mission = _mission('BOS', 'PVD')
+    slower = SlowerRealClimb(performance_model, 0.7)
+    builder = tb.AdjustableLegacyBuilder(
+        options=tb.Options(iterate_mass=False, iterate_ground_distance=True)
+    )
+
+    with pytest.raises(RuntimeError, match='Ground-distance iteration failed'):
+        builder.fly(slower, mission, cruise_altitude=9000.0)
+
+
+def test_a_route_with_cruise_is_not_changed_by_the_no_cruise_correction(
+    performance_model,
+):
+    """A long route has cruise, so the descent estimate keeps its meaning and
+    the same iteration as before must run."""
+    mission = _mission('BOS', 'ORD')
+    slower = SlowerRealClimb(performance_model, 0.7)
+
+    traj = tb.AdjustableLegacyBuilder(
+        options=tb.Options(iterate_mass=False, iterate_ground_distance=True)
+    ).fly(slower, mission)
+
+    assert traj.n_cruise > 1
+    assert abs(_miss(traj, mission)) < 1000.0

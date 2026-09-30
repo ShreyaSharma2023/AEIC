@@ -92,6 +92,16 @@ class Context:
     """Total fuel mass loaded onto the aircraft. Initialized as a non-reserve,
     non-divert/hold fuel mass for mass residual calculation."""
 
+    def lower_apex(self, overshoot: float) -> bool:
+        """Bring a flight with no cruise closer to the destination.
+
+        Called by ground-distance iteration when the flown trajectory had no
+        cruise segment and ended `overshoot` [m] past the destination (negative
+        if short). Returns whether the context could change the flight; this
+        default cannot, and the iteration then does what it does for any other
+        flight."""
+        return False
+
 
 class Builder(ABC):
     """Abstract parent class for all AEIC trajectory builders. Contains overall
@@ -335,7 +345,17 @@ class Builder(ABC):
                 return traj
             if iteration == self.options.max_dist_iters:
                 break
-            self.descent_dist_approx = actual
+            # Feeding the flown descent back moves the end of cruise earlier,
+            # which only helps if there is room for it: the climb ends at
+            # `climb_end` and the descent needs `actual`. Without room the
+            # descent estimate no longer says where cruise ends, the flight
+            # would overshoot by the same distance every time, and the cruise
+            # altitude has to move instead.
+            climb_end = float(traj.ground_distance[traj.n_climb - 1])
+            no_room = climb_end + actual >= self.ground_track.total_distance
+            overshoot = actual - self.descent_dist_approx
+            if not (no_room and self.ctx.lower_apex(overshoot)):
+                self.descent_dist_approx = actual
             traj = fly_once()
 
         raise RuntimeError(

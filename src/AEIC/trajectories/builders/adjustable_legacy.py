@@ -351,6 +351,12 @@ class AdjustableLegacyContext(Context):
         if self.descent_dist_approx < 0:
             raise ValueError('Descent distance must be non-negative')
 
+        # The distance the apex is sized to fit, which ground-distance iteration
+        # moves when the flight lands past or short of the destination, and
+        # whether the apex may be changed at all (see `lower_apex`).
+        self.apex_route_distance = ground_track.total_distance
+        self.apex_is_adjustable = cruise_altitude is None and descent_distance is None
+
         # A route too short to reach the normal cruise altitude and still
         # leave room for any cruise would overshoot the destination: the
         # climb to cruise altitude plus the descent back down already cover
@@ -405,6 +411,38 @@ class AdjustableLegacyContext(Context):
             initial_altitude=self.clm_start_altitude,
             starting_mass=starting_mass,
         )
+
+    def lower_apex(self, overshoot: float) -> bool:
+        """Size the apex for a route shorter (or longer) by `overshoot` [m].
+
+        The apex altitude is chosen from estimates made with no wind and at
+        fixed masses, so the flown climb and descent can cover more or less
+        ground than it expected. Sizing it for a route `overshoot` shorter
+        makes the next flight cover that much less. Does nothing, returning
+        False, if the cruise altitude or descent distance was set explicitly,
+        as the apex is then not this context's to change.
+
+        Raises:
+            ValueError: If the route is too short for any climb and descent, as
+                for `no_cruise_apex_altitude`."""
+        if not self.apex_is_adjustable:
+            return False
+        self.apex_route_distance -= overshoot
+        self.crz_start_altitude = no_cruise_apex_altitude(
+            self.ac_performance,
+            self.apex_route_distance,
+            self.clm_start_altitude,
+            self.des_end_altitude,
+            self.builder.altitude_step,
+        )
+        self.des_start_altitude = self.crz_start_altitude
+        self.descent_dist_approx = flown_descent_distance(
+            self.ac_performance,
+            self.crz_start_altitude,
+            self.des_end_altitude,
+            self.builder.altitude_step,
+        )
+        return True
 
     def apply_adjustment(
         self,
