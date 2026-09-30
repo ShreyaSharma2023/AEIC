@@ -24,6 +24,7 @@ from AEIC.types import Location
 from AEIC.weather import Weather
 from AEIC.weather_conversion.merra2 import (
     PRESSURE_LEVELS_HPA,
+    WIND_PACKING_STEP_MS,
     convert_day,
     merra2_path,
     write_day,
@@ -121,7 +122,9 @@ def test_each_hemisphere_gets_its_own_wind(converted_dir, lon):
     conversion a western-hemisphere point silently reads the eastern wind."""
     gs = _eastward_ground_speed(_weather(converted_dir), lon, hour=6)
 
-    assert gs == pytest.approx(TAS + _u(lon, _hours(6)), abs=1e-3)
+    assert gs == pytest.approx(
+        TAS + _u(lon, _hours(6)), abs=WIND_PACKING_STEP_MS / 2 + 1e-6
+    )
 
 
 @pytest.mark.parametrize('hour', [0, 1, 6, 23])
@@ -130,7 +133,9 @@ def test_the_hourly_winds_are_the_interpolated_three_hourly_ones(converted_dir, 
     need the neighbouring days' files."""
     gs = _eastward_ground_speed(_weather(converted_dir), -90.0, hour)
 
-    assert gs == pytest.approx(TAS + _u(-90.0, _hours(hour)), abs=1e-3)
+    assert gs == pytest.approx(
+        TAS + _u(-90.0, _hours(hour)), abs=WIND_PACKING_STEP_MS / 2 + 1e-6
+    )
 
 
 def test_a_query_gets_the_record_of_its_own_hour_not_the_nearest(converted_dir):
@@ -149,7 +154,9 @@ def test_a_point_near_sea_level_gets_the_full_surface_wind(converted_dir):
     interpolation gives the real wind rather than one dragged towards zero."""
     gs = _eastward_ground_speed(_weather(converted_dir), -90.0, 6, altitude=5.0)
 
-    assert gs == pytest.approx(TAS + _u(-90.0, _hours(6)), abs=1e-3)
+    assert gs == pytest.approx(
+        TAS + _u(-90.0, _hours(6)), abs=WIND_PACKING_STEP_MS / 2 + 1e-6
+    )
 
 
 def test_wind_inside_a_mountain_is_zero(converted_dir):
@@ -164,7 +171,9 @@ def test_above_the_mountain_the_wind_is_the_real_one(converted_dir):
         _weather(converted_dir), TERRAIN_LON, 6, altitude=10_000.0
     )
 
-    assert gs == pytest.approx(TAS + _u(TERRAIN_LON, _hours(6)), abs=1e-3)
+    assert gs == pytest.approx(
+        TAS + _u(TERRAIN_LON, _hours(6)), abs=WIND_PACKING_STEP_MS / 2 + 1e-6
+    )
 
 
 def test_the_file_has_no_nan_and_the_dimensions_weather_expects(converted_dir):
@@ -246,3 +255,61 @@ def test_the_command_is_registered_and_documented():
 
     assert result.exit_code == 0
     assert '--source-dir' in result.output
+
+
+###########################################
+######   Packing                     ######
+###########################################
+
+
+def _small_day(u_value):
+    shape = (2, 3, 4, 5)
+    dims = ('valid_time', 'pressure_level', 'latitude', 'longitude')
+    return xr.Dataset(
+        {
+            'u': (dims, np.full(shape, u_value, dtype=np.float32)),
+            'v': (dims, np.zeros(shape, dtype=np.float32)),
+        },
+        coords={
+            'valid_time': pd.date_range('2025-01-02', periods=2, freq='h'),
+            'pressure_level': [1000.0, 500.0, 250.0],
+            'latitude': np.linspace(-1, 1, 4),
+            'longitude': np.linspace(0, 4, 5),
+        },
+    )
+
+
+def test_winds_are_stored_as_16_bit_integers_and_read_back_to_the_packing_step(
+    tmp_path,
+):
+    """Half the size of float32, at a resolution far finer than the wind's own
+    uncertainty."""
+    path = tmp_path / 'day.nc'
+    write_day(_small_day(12.3456), path)
+
+    with xr.open_dataset(path, mask_and_scale=False) as raw:
+        assert raw['u'].dtype == np.int16
+    with xr.open_dataset(path) as decoded:
+        error = np.abs(decoded['u'].values - 12.3456)
+        assert error.max() <= WIND_PACKING_STEP_MS / 2 + 1e-6
+        assert decoded['u'].dtype == np.float32 or decoded['u'].dtype == np.float64
+
+
+def test_zero_wind_survives_packing_exactly(tmp_path):
+    """Levels under the ground are exactly zero, and must not become 0.003."""
+    path = tmp_path / 'day.nc'
+    write_day(_small_day(0.0), path)
+
+    with xr.open_dataset(path) as decoded:
+        assert (decoded['u'].values == 0.0).all()
+        assert not np.isnan(decoded['u'].values).any()
+
+
+def test_a_wind_beyond_the_16_bit_range_is_an_error_and_writes_nothing(tmp_path):
+    """Clipping would silently turn a wrong wind into a plausible one."""
+    path = tmp_path / 'day.nc'
+
+    with pytest.raises(ValueError, match=r'u.*400.*327\.67'):
+        write_day(_small_day(400.0), path)
+
+    assert list(tmp_path.iterdir()) == []
