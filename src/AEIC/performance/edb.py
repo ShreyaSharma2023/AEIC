@@ -2,12 +2,46 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from .types import LTOPerformance, ThrustMode, ThrustModeValues
+
+GASEOUS_SHEET = 'Gaseous Emissions and Smoke'
+NVPM_SHEET = 'nvPM Emissions'
+
+
+@lru_cache(maxsize=4)
+def _read_sheets(
+    excel_file: str, modified_ns: int, size: int
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The gaseous and nvPM sheets of an EDB workbook.
+
+    Parsing the workbook takes seconds and a run looks up an engine for each of
+    hundreds of performance models, so this is kept for the life of the process.
+    The modification time and size are arguments only so that a workbook changed
+    on disk is read again. The frames are shared between callers and must not be
+    modified. A workbook that cannot be read is not kept."""
+    try:
+        xls = pd.ExcelFile(excel_file)
+    except Exception as exc:
+        raise ValueError(f"Unable to open EDB workbook at {excel_file}: {exc}") from exc
+
+    missing_sheets = [
+        sheet for sheet in (GASEOUS_SHEET, NVPM_SHEET) if sheet not in xls.sheet_names
+    ]
+    if missing_sheets:
+        missing = ', '.join(missing_sheets)
+        raise ValueError(f"EDB workbook is missing required sheets: {missing}")
+
+    gaseous = xls.parse(GASEOUS_SHEET)
+    assert isinstance(gaseous, pd.DataFrame)
+    nvpm = xls.parse(NVPM_SHEET)
+    assert isinstance(nvpm, pd.DataFrame)
+    return gaseous, nvpm
 
 
 @dataclass
@@ -69,28 +103,13 @@ class EDBEntry:
         for UID given, combining data from the "Gaseous Emissions and Smoke"
         and "nvPM Emissions" sheets."""
         try:
-            xls = pd.ExcelFile(excel_file)
-        except Exception as exc:
+            stat = Path(excel_file).stat()
+        except OSError as exc:
             raise ValueError(
                 f"Unable to open EDB workbook at {excel_file}: {exc}"
             ) from exc
-
-        gaseous_sheet = 'Gaseous Emissions and Smoke'
-        nvpm_sheet = 'nvPM Emissions'
-
-        missing_sheets = [
-            sheet
-            for sheet in (gaseous_sheet, nvpm_sheet)
-            if sheet not in xls.sheet_names
-        ]
-        if missing_sheets:
-            missing = ', '.join(missing_sheets)
-            raise ValueError(f"EDB workbook is missing required sheets: {missing}")
-
-        gaseous = xls.parse(gaseous_sheet)
-        assert isinstance(gaseous, pd.DataFrame)
-        nvpm = xls.parse(nvpm_sheet)
-        assert isinstance(nvpm, pd.DataFrame)
+        gaseous, nvpm = _read_sheets(str(excel_file), stat.st_mtime_ns, stat.st_size)
+        gaseous_sheet, nvpm_sheet = GASEOUS_SHEET, NVPM_SHEET
 
         if 'UID No' not in gaseous.columns or 'UID No' not in nvpm.columns:
             raise ValueError("UID No column is missing from one or both sheets.")
