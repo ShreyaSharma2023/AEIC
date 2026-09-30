@@ -717,7 +717,7 @@ class Test_nvPMScope11:
         assert tf.number[ThrustMode.IDLE] > 0
 
     def test_scope11_raises_when_a_mode_has_no_valid_smoke_number(self):
-        """`SN == -1` and `SN == 0` mean "no smoke-number measurement" --
+        """`SN == -1` means "no smoke-number measurement" --
         this is the SCOPE11 fallback's own fallback, so if it also has
         nothing to work with for a mode, the aircraft's nvPM emissions
         cannot be estimated at all. Silently returning zero there would
@@ -731,11 +731,31 @@ class Test_nvPMScope11:
         with pytest.raises(ValueError, match='CLIMB'):
             calculate_nvPM_scope11_LTO(SN_matrix, 'TF', BP_Ratio=2.0)
 
-    def test_scope11_raises_on_the_zero_sentinel_too(self):
-        """`SN == 0` is the other documented "no measurement" sentinel,
-        distinct from an actually-measured zero smoke number."""
+    def test_scope11_accepts_a_zero_smoke_number_as_a_low_value(self):
+        """An EDB smoke number of 0 is a measurement below what could be
+        recorded, not a missing one (142 of 888 engines mix positive and zero
+        smoke numbers across modes). SCOPE11's curve is finite there: the
+        exit-plane concentration is 648.4 / (1 + exp(1.099 * 3.064)), about
+        21.6 ug/m3, and the emission index follows from it."""
         SN_matrix = ThrustModeValues(5.0, 50.0, 30.0, 0.0)
-        with pytest.raises(ValueError, match='TAKEOFF'):
+
+        profile = calculate_nvPM_scope11_LTO(SN_matrix, 'TF', BP_Ratio=2.0)
+
+        ci = 648.4 / (1 + np.exp(1.099 * 3.064))
+        q = 0.776 * 45 + 0.767  # air-fuel ratio 45 at take-off
+        kslm = np.log((3.219 * ci + 312.5) / (ci + 42.6))
+        expected_g_per_kg = ci * q * kslm * 1e-6
+        assert profile.mass[ThrustMode.TAKEOFF] == pytest.approx(expected_g_per_kg)
+        assert profile.mass[ThrustMode.TAKEOFF] > 0
+        assert np.isfinite(profile.number[ThrustMode.TAKEOFF])
+
+    def test_scope11_raises_on_a_missing_smoke_number_too(self):
+        """The EDB leaves the smoke number blank (NaN in the workbook) for some
+        engines. NaN is neither -1 nor 0, so it used to slip past the sentinel
+        check and come out as a NaN nvPM emission index, which then turns any
+        inventory cell it is summed into into NaN."""
+        SN_matrix = ThrustModeValues(5.0, 50.0, float('nan'), 40.0)
+        with pytest.raises(ValueError, match='CLIMB'):
             calculate_nvPM_scope11_LTO(SN_matrix, 'TF', BP_Ratio=2.0)
 
 

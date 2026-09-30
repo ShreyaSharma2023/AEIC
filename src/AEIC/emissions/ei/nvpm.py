@@ -214,8 +214,10 @@ def calculate_nvPM_scope11_LTO(
     Parameters
     ----------
     SN_matrix : ThrustModeValues
-        Smoke number matrix for each ICAO mode. Sentinel values
-        ``SN == -1`` and ``SN == 0`` mean "no measurement available".
+        Smoke number matrix for each ICAO mode. The sentinel ``SN == -1``
+        and a blank (NaN) entry mean "no measurement available". A smoke
+        number of 0 is a measurement below what could be recorded and is used
+        as it is: the curve below is finite at 0.
     ENGINE_TYPE : str
         Engine type ('TF', 'MTF', etc.).
     BP_Ratio : float
@@ -229,9 +231,9 @@ def calculate_nvPM_scope11_LTO(
     Raises
     ------
     ValueError
-        If any mode's ``SN_matrix`` entry is the -1 / 0 "no measurement"
-        sentinel. Estimating that mode as zero would silently understate
-        emissions rather than surface the missing data.
+        If any mode's ``SN_matrix`` entry is the -1 sentinel or blank (NaN).
+        Estimating that mode as zero, or carrying a NaN into the inventory,
+        would silently corrupt emissions rather than surface the missing data.
     """
 
     # Air to fuel ration at four LTO points, estimated by Wayson et al. (2009)
@@ -250,7 +252,7 @@ def calculate_nvPM_scope11_LTO(
     for mode in ThrustMode:
         SN = SN_matrix[mode]
 
-        if SN == -1 or SN == 0:
+        if SN == -1 or np.isnan(SN):
             raise ValueError(
                 f'No usable nvPM data for {mode.name} mode: no direct EDB '
                 f'nvPM measurement and no valid smoke number to estimate '
