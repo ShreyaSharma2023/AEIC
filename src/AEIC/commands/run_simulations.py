@@ -9,7 +9,7 @@ import click
 import AEIC.trajectories.builders as tb
 from AEIC.config import Config, config
 from AEIC.emissions import compute_emissions
-from AEIC.missions import CountQuery, Database, Query
+from AEIC.missions import CountQuery, Database, Filter, Query
 from AEIC.missions.load_factors import LoadFactorTable
 from AEIC.performance.model_selector import (
     PerformanceModelSelector,
@@ -64,30 +64,46 @@ def make_trajectory_builder(
             raise ValueError(f'Unknown trajectory builder: {builder!r}')
 
 
+def load_filter(path: Path | None) -> Filter | None:
+    """A flight filter from a TOML file, or None if there is no file."""
+    if path is None:
+        return None
+    with open(path, 'rb') as fp:
+        return Filter.model_validate(tomllib.load(fp))
+
+
 def plan_slice(
     db: Database,
     sample: float | None,
     slice_count: int,
     slice_index: int,
     departure_date: date | None = None,
+    filter: Filter | None = None,
 ) -> Query:
     """The query for the flights of one slice of a run.
 
-    The flights (of the given departure day, if there is one) are split into
+    The flights (of the given departure day and matching the filter, if there
+    are any) are split into
     `slice_count` groups of about equal size in departure order, and the query is
     for group `slice_index`. The last group is shortened to fit.
 
     Raises:
         ValueError: If no flights match. An empty run is far more likely a wrong
-            date than an intended result.
+            date or filter than an intended result.
     """
-    nflights = db(CountQuery(start_date=departure_date, end_date=departure_date))
+    nflights = db(
+        CountQuery(filter=filter, start_date=departure_date, end_date=departure_date)
+    )
     assert isinstance(nflights, int)
     if nflights == 0:
         raise ValueError(
-            'no flights in the mission database'
-            if departure_date is None
+            f'no flights depart on {departure_date} that match the filter'
+            if departure_date is not None and filter is not None
             else f'no flights depart on {departure_date}'
+            if departure_date is not None
+            else 'no flights match the filter'
+            if filter is not None
+            else 'no flights in the mission database'
         )
     logger.info('Total flights to process: %s', nflights)
     if sample is not None:
@@ -102,6 +118,7 @@ def plan_slice(
         limit = min(limit, nflights - offset)
     logger.info('Flights to process in slice: %s', limit)
     return Query(
+        filter=filter,
         limit=limit,
         offset=offset,
         sample=sample,
@@ -292,6 +309,14 @@ def simulate_slice(
     'A run over hundreds of models flying in departure order should hold them all, '
     'or every flight reloads its model.',
 )
+@click.option(
+    '--filter-file',
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help='Flight filter (TOML, the same format as for trajectories-to-grid). Only '
+    'the flights it selects are flown, e.g. `performance_model_key = [...]` to '
+    'fly again the flights of changed models.',
+)
 def run_simulations(
     config_file: Path,
     performance_selector_dir: Path | None,
@@ -309,6 +334,7 @@ def run_simulations(
     load_factor_file: Path | None,
     departure_date: datetime | None,
     model_cache_size: int,
+    filter_file: Path | None,
 ):
     if performance_selector_dir is None == performance_model_file is None:
         raise click.UsageError(
@@ -337,6 +363,7 @@ def run_simulations(
                     slice_count,
                     slice_index,
                     departure_date.date() if departure_date else None,
+                    load_filter(filter_file),
                 )
             except ValueError as exc:
                 raise click.UsageError(str(exc)) from exc
