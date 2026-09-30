@@ -2,7 +2,7 @@ import json
 import logging
 import platform
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import netCDF4 as nc4
@@ -49,6 +49,9 @@ class OutputGrid:
     traj_repro: ReproducibilityData | None
     traj_comments: list[str]
     filter_json: str | None
+    period: tuple[date, date] | None = None
+    """Departure dates (UTC, inclusive) the inventory is for, or None for every
+    departure in the mission database."""
 
     def write(self, output_file: Path) -> None:
         """Write the accumulated gridded data to a NetCDF file.
@@ -219,6 +222,9 @@ class OutputGrid:
             # Minimal global attributes for quick identification.
             ds.aeic_version = VERSION
             ds.created_utc = datetime.now(UTC).isoformat()
+            if self.period is not None:
+                ds.period_start_utc = self.period[0].isoformat()
+                ds.period_end_utc = self.period[1].isoformat()
 
             # Reproducibility groups under _reproducibility/.
             repro = ds.createGroup('_reproducibility')
