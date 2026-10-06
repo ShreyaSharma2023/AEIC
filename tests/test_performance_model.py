@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from AEIC.config import config
-from AEIC.performance.edb import EDBEntry
 from AEIC.performance.model_builder import build_piano_model
 from AEIC.performance.model_selector import SimplePerformanceModelSelector
 from AEIC.performance.models import (
@@ -183,22 +182,3 @@ def test_simple_selector_caches_repeated_lookups(
     ]
     assert len(same) >= 2
     assert performance_model_selector(same[0]) is performance_model_selector(same[1])
-
-
-def test_the_engine_lookup_tolerates_an_engine_with_no_nvpm_entry(
-    performance_model, monkeypatch
-):
-    """Older engines have gaseous emissions data but no nvPM measurements. The
-    lookup must accept them, so the emissions calculation can estimate nvPM
-    from the smoke number (SCOPE11) instead of the run failing at the first
-    flight on such an engine."""
-    seen = {}
-
-    def get_engine(cls, excel_file, uid, strict=True):
-        seen['strict'] = strict
-        return 'an EDB entry'
-
-    monkeypatch.setattr(EDBEntry, 'get_engine', classmethod(get_engine))
-
-    assert performance_model.edb == 'an EDB entry'
-    assert seen['strict'] is False

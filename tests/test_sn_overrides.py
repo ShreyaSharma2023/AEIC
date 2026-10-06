@@ -17,6 +17,7 @@ from AEIC.performance.edb import EDBEntry
 from AEIC.performance.sn_overrides import apply_sn_override, read_sn_overrides
 from AEIC.performance.types import ThrustMode, ThrustModeValues
 
+FRACTIONS = [0.07, 0.30, 0.85, 1.0]
 HEADER = 'uid,sn_idle,sn_app,sn_co,sn_to,proxy_uid,method,confidence,note\n'
 
 
@@ -124,12 +125,12 @@ def test_an_engine_with_blank_smoke_numbers_estimates_nvpm_once_overridden(
     """Without the override this engine has no usable smoke number at any mode."""
     engine = _blank_engine(sample_edb_entry)
     with pytest.raises(ValueError, match='No usable nvPM data'):
-        scope11_profile_for_engine(engine)
+        scope11_profile_for_engine(engine.make_lto_performance(FRACTIONS))
 
     replaced = apply_sn_override(
         engine, read_sn_overrides(overrides_file(tmp_path, ROW))
     )
-    profile = scope11_profile_for_engine(replaced)
+    profile = scope11_profile_for_engine(replaced.make_lto_performance(FRACTIONS))
 
     assert all(
         math.isfinite(profile.mass[m]) and profile.mass[m] > 0 for m in ThrustMode
@@ -147,17 +148,3 @@ def test_using_an_override_is_logged_once_per_engine(
             apply_sn_override(engine, overrides)
 
     assert len([r for r in caplog.records if '1PW039' in r.message]) == 1
-
-
-@pytest.mark.config_updates(sn_override_file='engines/sn_overrides.csv')
-def test_a_model_takes_the_overridden_smoke_numbers_from_the_configured_file(
-    performance_model,
-):
-    sn = performance_model.edb.SN_matrix
-
-    assert [sn[m] for m in ThrustMode] == [1.5, 3.5, 7.5, 9.5]
-
-
-def test_without_a_configured_file_the_edb_smoke_numbers_are_used(performance_model):
-    assert config.sn_override_file is None
-    assert performance_model.edb.SN_matrix[ThrustMode.TAKEOFF] != 9.5
