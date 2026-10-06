@@ -15,7 +15,7 @@ from AEIC.commands.run_simulations import (
     plan_slice,
     run_simulations,
 )
-from AEIC.missions import Database
+from AEIC.missions import Database, Query
 
 
 def test_the_defaults_are_the_legacy_builder_without_mass_iteration():
@@ -124,7 +124,27 @@ def test_a_day_with_no_flights_is_an_error_not_an_empty_run(db):
 
 
 def test_sampling_applies_within_the_day(db):
-    query = plan_slice(db, 0.5, 1, 0, departure_date=BUSY_DAY)
+    """The slice is sized for the sample that is actually drawn, which is not
+    exactly half of 8 flights."""
+    query = plan_slice(db, 0.5, 1, 0, departure_date=BUSY_DAY, seed=3)
 
-    assert query.limit == 4
+    db.set_random_seed(3)
+    drawn = [
+        m.flight_id
+        for m in db(Query(sample=0.5, start_date=BUSY_DAY, end_date=BUSY_DAY))
+    ]
+    assert query.limit == len(drawn)
     assert query.start_date == query.end_date == BUSY_DAY
+
+
+def test_slices_past_the_end_of_a_few_flights_are_empty_not_an_error(db):
+    """A day with fewer flights than slices, such as a rerun of a handful of
+    flights, leaves some slices with nothing to fly; the last one used to ask for
+    a negative number of flights, which the database rejects."""
+    queries = [plan_slice(db, None, 16, i, departure_date=BUSY_DAY) for i in range(16)]
+
+    flights = [f for q in queries if q is not None for f in flights_of(db, q)]
+    assert len(flights) == 8
+    assert len({f.flight_id for f in flights}) == 8  # each flight in one slice
+    assert any(q is None for q in queries)
+    assert all(q.limit > 0 for q in queries if q is not None)

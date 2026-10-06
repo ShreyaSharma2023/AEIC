@@ -78,6 +78,18 @@ class QueryBase[T](ABC):
                 int((date_to_timestamp(self.end_date) + timedelta(days=1)).timestamp())
             )
 
+    def _sample_condition(self, sample: float | None):
+        """Add the condition that a row is in a random sample of the given
+        fraction. Membership is a hash of the schedule id and the database's
+        seed (see `Database.set_random_seed`)."""
+        if sample is not None:
+            if not (0.0 < sample <= 1.0):
+                raise ValueError('sample frequency must be between 0.0 and 1.0.')
+            self._conditions.append(
+                '(det_random(s.id) + 9223372036854775808) / 18446744073709551615.0 < ?'
+            )
+            self._params.append(sample)
+
     def _where_clause(self):
         """Generate WHERE clause from accumulated conditions."""
         return ' WHERE ' + ' AND '.join(self._conditions) if self._conditions else ''
@@ -155,11 +167,7 @@ class Query(QueryBase[Mission]):
         # specification of SQLite's random() function. (But use the
         # deterministic random function we defined in the database class, so
         # that results are reproducible when a seed is set.)
-        if self.sample is not None:
-            self._conditions.append(
-                '(det_random() + 9223372036854775808) / 18446744073709551615.0 < ?'
-            )
-            self._params.append(self.sample)
+        self._sample_condition(self.sample)
 
         # Return flights only on every nth day.
         if self.every_nth is not None and self.every_nth > 1:
@@ -261,6 +269,10 @@ class FrequentFlightQuery(QueryBase[FrequentFlightQueryResult]):
 class CountQuery(QueryBase[int]):
     """Count scheduled flights."""
 
+    sample: float | None = None
+    """Count only a random sample of this fraction (0.0 < sample <= 1.0): the
+    same rows that a `Query` with this `sample` returns."""
+
     RESULT_TYPE = int
     """Result type returned by this query class."""
 
@@ -271,6 +283,7 @@ class CountQuery(QueryBase[int]):
 
         # Handle filter and date conditions.
         self._common_conditions()
+        self._sample_condition(self.sample)
 
         # Build the SQL query, shortcutting the common case of no conditions to
         # count all flight instances.

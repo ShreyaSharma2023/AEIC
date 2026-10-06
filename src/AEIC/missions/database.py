@@ -14,6 +14,17 @@ logger = logging.getLogger(__name__)
 T = TypeVar('T')
 
 
+_MASK64 = (1 << 64) - 1
+
+
+def _splitmix64(x: int) -> int:
+    """One step of the splitmix64 mixing function: a well-spread 64-bit hash."""
+    x = (x + 0x9E3779B97F4A7C15) & _MASK64
+    x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
+    x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & _MASK64
+    return x ^ (x >> 31)
+
+
 class Database:
     """Flight schedule database.
 
@@ -46,23 +57,28 @@ class Database:
         self._finalizer = weakref.finalize(self, self.close)
 
         # Create a deterministic random function for use in random sampling
-        # queries. This is needed to ensure reproducibility because SQLite's
-        # random() function is not deterministic across different runs.
-        self._rng = random.Random()
+        # queries. SQLite's random() is not reproducible across runs. This is a
+        # hash of the row's id and a seed, not a stream of numbers, so whether a
+        # row is sampled does not depend on the order SQLite visits rows, on
+        # LIMIT and OFFSET or on other conditions, and separate processes with
+        # the same seed draw the same sample.
+        self._seed_mix = _splitmix64(random.getrandbits(64))
 
-        def det_random():
-            # Mimic SQLite random(): signed 64-bit integer.
-            return self._rng.randint(-(2**63), 2**63 - 1)
+        def det_random(row_id):
+            # Like SQLite's random(): a signed 64-bit integer.
+            value = _splitmix64((int(row_id) ^ self._seed_mix) & _MASK64)
+            return value - 2**64 if value >= 2**63 else value
 
-        self._conn.create_function('det_random', 0, det_random)
+        self._conn.create_function('det_random', 1, det_random, deterministic=True)
 
         # Foreign key constraints are enabled at the connection level, so this
         # needs to be done every time we connect to the database.
         self._conn.cursor().execute('PRAGMA foreign_keys = ON')
 
     def set_random_seed(self, seed: int):
-        """Set the random seed for deterministic sampling queries."""
-        self._rng.seed(seed)
+        """Set the seed for deterministic sampling queries: the same seed samples
+        the same rows."""
+        self._seed_mix = _splitmix64(int(seed) & _MASK64)
 
     def close(self):
         """Close the database connection."""
