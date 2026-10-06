@@ -14,6 +14,7 @@ documented with the aircraft performance database parser, which owns it.
 from __future__ import annotations
 
 import csv
+import math
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -24,7 +25,12 @@ from AEIC.parsers.piano_reader.plane_file import read_operating_empty_mass
 from AEIC.performance.edb import EDBEntry
 from AEIC.performance.model_builder import build_piano_model, write_performance_model
 from AEIC.performance.models.base import LTOPerformanceInput
-from AEIC.performance.types import SpeedData
+from AEIC.performance.sn_overrides import (
+    SNOverrides,
+    apply_sn_override,
+    read_sn_overrides,
+)
+from AEIC.performance.types import SpeedData, ThrustMode
 from AEIC.units import FEET_TO_METERS, KNOTS_TO_MPS, POUNDS_TO_KG
 from AEIC.utils.standard_atmosphere import cas_to_tas, speed_of_sound_at_altitude
 
@@ -73,8 +79,54 @@ def read_airframes(path: str | Path) -> dict[str, dict[str, str]]:
         missing = [c for c in REQUIRED_COLUMNS if c not in (reader.fieldnames or [])]
         if missing:
             raise ValueError(f'{path}: missing columns {", ".join(missing)}')
-        rows = {row['save_as'].strip(): row for row in reader}
+        rows: dict[str, dict[str, str]] = {}
+        for row in reader:
+            save_as = row['save_as'].strip()
+            first = rows.setdefault(save_as, row)
+            # A table with one row per performance model key repeats the
+            # airframe's columns on each of its rows.
+            differing = [c for c in REQUIRED_COLUMNS if first[c] != row[c]]
+            if differing:
+                raise ValueError(
+                    f'{path}: rows of airframe {save_as} disagree on '
+                    f'{", ".join(differing)}'
+                )
     return rows
+
+
+def read_table_keys(path: str | Path) -> list[str]:
+    """The performance model keys of a table with one row per key, sorted.
+
+    Such a table has the columns ``performance_model_key`` and ``edb_uid``
+    beside the airframe's. A row with no key (an airframe no engine is flown
+    on) is skipped.
+
+    Raises:
+        ValueError: If a key is not its row's ``<save_as>_<edb_uid>``, or is
+            listed twice. A flight finds its model by the key, so a key that
+            does not name its own row's engine record would give flights the
+            wrong engine.
+    """
+    keys: list[str] = []
+    with open(path, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        needed = ('performance_model_key', 'edb_uid', 'save_as')
+        missing = [c for c in needed if c not in (reader.fieldnames or [])]
+        if missing:
+            raise ValueError(f'{path}: missing columns {", ".join(missing)}')
+        for row in reader:
+            key = row['performance_model_key'].strip()
+            if not key:
+                continue
+            expected = f'{row["save_as"].strip()}_{row["edb_uid"].strip()}'
+            if key != expected:
+                raise ValueError(
+                    f'{path}: key {key} is not its airframe and engine UID, {expected}'
+                )
+            if key in keys:
+                raise ValueError(f'{path}: key {key} is listed twice')
+            keys.append(key)
+    return sorted(keys)
 
 
 def _number(row: dict[str, str], column: str) -> float:
@@ -206,10 +258,39 @@ def read_model_keys(mission_db: str | Path) -> list[str]:
 ###########################################
 
 
-def _lto(engine_file: Path, uid: str) -> LTOPerformanceInput:
-    """LTO data for an EDB engine. A missing nvPM entry is not an error: the
-    emissions calculation then estimates nvPM from the smoke number."""
+def _lto(
+    engine_file: Path, uid: str, sn_overrides: SNOverrides | None
+) -> LTOPerformanceInput:
+    """LTO data for an EDB engine, with its smoke numbers replaced if the
+    override file has the engine.
+
+    A missing nvPM entry is not an error: the emissions calculation then
+    estimates nvPM from the smoke numbers. The model stores those, so they
+    must be usable here.
+
+    Raises:
+        ValueError: If the engine has neither nvPM measurements at all four
+            modes nor a smoke number at each (0 is a valid smoke number; blank
+            and -1 are not).
+    """
     entry = EDBEntry.get_engine(engine_file, uid, strict=False)
+    if sn_overrides is not None:
+        entry = apply_sn_override(entry, sn_overrides)
+    measured = all(
+        entry.nvPM_mass_matrix[m] > 0.0 and entry.nvPM_num_matrix[m] > 0.0
+        for m in ThrustMode
+    )
+    blank = [
+        m.name
+        for m in ThrustMode
+        if math.isnan(entry.SN_matrix[m]) or entry.SN_matrix[m] == -1
+    ]
+    if not measured and blank:
+        raise ValueError(
+            f'engine {uid} ({entry.engine}) has no nvPM measurements and no '
+            f'smoke number at {", ".join(blank)}; it needs a row in the smoke '
+            'number override file'
+        )
     return LTOPerformanceInput.from_internal(
         entry.make_lto_performance(THRUST_FRACTIONS)
     )
@@ -224,6 +305,7 @@ def run_batch(
     *,
     force: bool = False,
     plane_files_dir: str | Path | None = None,
+    sn_override_file: str | Path | None = None,
 ) -> BatchReport:
     """Build a performance model TOML for each key in `keys`.
 
@@ -237,6 +319,8 @@ def run_batch(
         force: Rebuild models that already exist. By default they are skipped.
         plane_files_dir: PIANO plane files, to read an operating empty mass
             from when the airframe table has none.
+        sn_override_file: CSV of smoke numbers by engine UID that replace the
+            Emissions Databank's (see `AEIC.performance.sn_overrides`).
 
     A key that cannot be built is recorded in the report and does not stop the
     others.
@@ -247,6 +331,10 @@ def run_batch(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     plane_dir = Path(plane_files_dir) if plane_files_dir is not None else None
+
+    sn_overrides = (
+        read_sn_overrides(sn_override_file) if sn_override_file is not None else None
+    )
 
     report = BatchReport()
     parsed: dict[str, PianoData | Exception] = {}
@@ -278,7 +366,7 @@ def run_batch(
             row = airframes[save_as]
             model = build_piano_model(
                 piano_data(save_as),
-                _lto(engine_file, uid),
+                _lto(engine_file, uid, sn_overrides),
                 aircraft_class=row['aircraft_class'],
                 number_of_engines=int(row['n_engines']),
                 maximum_payload=int(float(row['max_payload_kg'])),

@@ -7,6 +7,7 @@ the numbers are physically plausible.
 """
 
 import csv
+import dataclasses
 import shutil
 import sqlite3
 
@@ -16,6 +17,7 @@ from click.testing import CliRunner
 from AEIC.commands.make_piano_models import make_piano_models
 from AEIC.config import config
 from AEIC.parsers.piano_reader import PianoData
+from AEIC.performance.edb import EDBEntry
 from AEIC.performance.models import PerformanceModel
 from AEIC.performance.piano_batch import (
     BatchReport,
@@ -25,9 +27,11 @@ from AEIC.performance.piano_batch import (
     piano_overrides,
     read_airframes,
     read_model_keys,
+    read_table_keys,
     run_batch,
     split_model_key,
 )
+from AEIC.performance.types import ThrustMode, ThrustModeValues
 from AEIC.units import FEET_TO_METERS, KNOTS_TO_MPS, POUNDS_TO_KG
 from AEIC.utils.standard_atmosphere import cas_to_tas, speed_of_sound_at_altitude
 
@@ -314,6 +318,8 @@ def test_the_command_is_registered_and_documented():
 
     assert result.exit_code == 0
     assert '--mission-db-file' in result.output
+    assert '--sn-override-file' in result.output
+    assert '--keys-from-table' in result.output
 
 
 def test_an_export_with_no_descent_schedule_uses_the_airframe_tables_speeds(
@@ -332,3 +338,144 @@ def test_an_export_with_no_descent_schedule_uses_the_airframe_tables_speeds(
     assert report.failed == {}
     model = PerformanceModel.load(tmp_path / 'models' / f'{key}.toml')
     assert model.speeds.descent.mach == 0.780
+
+
+###########################################
+######   Smoke numbers at build time  ######
+###########################################
+
+SN_HEADER = 'uid,sn_idle,sn_app,sn_co,sn_to,proxy_uid,method\n'
+
+
+def _engine_without_nvpm(monkeypatch, sn):
+    """Make the sample engine look like an old one: no nvPM measurements, and
+    the given smoke numbers (idle, approach, climb-out, take-off)."""
+    real = EDBEntry.get_engine.__func__
+
+    def get_engine(cls, excel_file, uid, strict=True):
+        entry = real(cls, excel_file, uid, strict=strict)
+        return dataclasses.replace(
+            entry,
+            SN_matrix=ThrustModeValues(*sn),
+            nvPM_mass_matrix=ThrustModeValues(0.0),
+            nvPM_num_matrix=ThrustModeValues(0.0),
+        )
+
+    monkeypatch.setattr(EDBEntry, 'get_engine', classmethod(get_engine))
+
+
+def test_an_engine_with_no_nvpm_data_and_a_blank_smoke_number_is_not_built(
+    manifest, piano_root, tmp_path, monkeypatch
+):
+    """The model stores the engine's smoke numbers, so one with a blank could
+    only fail flight by flight during a run. It fails here instead, by key."""
+    _engine_without_nvpm(monkeypatch, (float('nan'), 2.0, 5.0, 7.0))
+    key = f'{SAVE_AS}_{EDB_UID}'
+
+    report = batch([key], manifest, piano_root, tmp_path)
+
+    assert report.built == []
+    assert EDB_UID in report.failed[key] and 'smoke number' in report.failed[key]
+    assert not (tmp_path / 'models' / f'{key}.toml').exists()
+
+
+def test_a_zero_smoke_number_is_enough_to_build(
+    manifest, piano_root, tmp_path, monkeypatch
+):
+    _engine_without_nvpm(monkeypatch, (0.0, 2.0, 5.0, 7.0))
+    key = f'{SAVE_AS}_{EDB_UID}'
+
+    assert batch([key], manifest, piano_root, tmp_path).built == [key]
+
+
+def test_smoke_numbers_from_the_override_file_are_written_into_the_model(
+    manifest, piano_root, tmp_path, monkeypatch
+):
+    _engine_without_nvpm(monkeypatch, (float('nan'),) * 4)
+    overrides = tmp_path / 'overrides.csv'
+    overrides.write_text(SN_HEADER + f'{EDB_UID},1.5,3.5,7.5,9.5,XXX,copy\n')
+    key = f'{SAVE_AS}_{EDB_UID}'
+
+    report = batch([key], manifest, piano_root, tmp_path, sn_override_file=overrides)
+
+    assert report.built == [key]
+    model = PerformanceModel.load(tmp_path / 'models' / f'{key}.toml')
+    sn = model.lto.SN_matrix
+    assert [sn[m] for m in ThrustMode] == [1.5, 3.5, 7.5, 9.5]
+
+
+def test_an_engine_with_measured_nvpm_is_built_whatever_its_smoke_numbers(
+    manifest, piano_root, tmp_path, monkeypatch
+):
+    """Direct nvPM measurements are used in preference to smoke numbers, so a
+    blank smoke number does not matter then."""
+    real = EDBEntry.get_engine.__func__
+
+    def get_engine(cls, excel_file, uid, strict=True):
+        entry = real(cls, excel_file, uid, strict=strict)
+        return dataclasses.replace(
+            entry, SN_matrix=ThrustModeValues(*(float('nan'),) * 4)
+        )
+
+    monkeypatch.setattr(EDBEntry, 'get_engine', classmethod(get_engine))
+    key = f'{SAVE_AS}_{EDB_UID}'
+
+    assert batch([key], manifest, piano_root, tmp_path).built == [key]
+
+
+###########################################
+######   Keys from the per-key table  ######
+###########################################
+
+
+def _key_table(tmp_path, *rows):
+    path = tmp_path / 'keys.csv'
+    fields = ['performance_model_key', 'edb_uid', *ROW]
+    with open(path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({**ROW, **row})
+    return path
+
+
+def test_keys_are_read_from_a_table_with_one_row_per_key(tmp_path):
+    table = _key_table(
+        tmp_path,
+        {'performance_model_key': f'{SAVE_AS}_B2', 'edb_uid': 'B2'},
+        {'performance_model_key': f'{SAVE_AS}_A1', 'edb_uid': 'A1'},
+        {'performance_model_key': '', 'edb_uid': ''},  # a deck no engine flies on
+    )
+
+    assert read_table_keys(table) == [f'{SAVE_AS}_A1', f'{SAVE_AS}_B2']
+
+
+def test_a_key_that_is_not_its_airframe_and_engine_uid_is_an_error(tmp_path):
+    """The key is how a flight finds its model, so a row whose key does not
+    name its own airframe and engine record would map flights to the wrong
+    engine without any other sign."""
+    table = _key_table(
+        tmp_path, {'performance_model_key': f'{SAVE_AS}_A1', 'edb_uid': 'B2'}
+    )
+
+    with pytest.raises(ValueError, match=f'{SAVE_AS}_A1.*B2'):
+        read_table_keys(table)
+
+
+def test_a_key_listed_twice_is_an_error(tmp_path):
+    row = {'performance_model_key': f'{SAVE_AS}_A1', 'edb_uid': 'A1'}
+
+    with pytest.raises(ValueError, match='twice'):
+        read_table_keys(_key_table(tmp_path, row, row))
+
+
+def test_rows_of_one_airframe_that_disagree_are_an_error(tmp_path):
+    """Airframe columns repeat on every key's row; the batch reads one of them."""
+    table = _key_table(
+        tmp_path,
+        {'performance_model_key': f'{SAVE_AS}_A1', 'edb_uid': 'A1'},
+        {'performance_model_key': f'{SAVE_AS}_B2', 'edb_uid': 'B2', 'oew_kg': '1'},
+    )
+
+    with pytest.raises(ValueError, match=f'{SAVE_AS}.*oew_kg'):
+        read_airframes(table)
