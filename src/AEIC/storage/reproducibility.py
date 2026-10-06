@@ -53,18 +53,31 @@ class ReproducibilityData:
     def __or__(self, other: ReproducibilityData) -> ReproducibilityData:
         """Combine two ReproducibilityData instances by merging their file lists
         and ensuring other fields match (or are compatible)."""
+        return self.combine(other)
+
+    def combine(
+        self, other: ReproducibilityData, allow_differing_runs: bool = False
+    ) -> ReproducibilityData:
+        """Combine with another instance: the file lists are merged and the
+        other fields must match.
+
+        With `allow_differing_runs`, the software version, git state and
+        configuration may differ and the first instance's values are kept. The
+        Python version and the sampling must still match, since they change what
+        the numbers mean."""
         if self.python_version != other.python_version:
             raise ValueError('ReproducibilityData: Python version mismatch')
-        if self.software_version != other.software_version:
-            raise ValueError('ReproducibilityData: software version mismatch')
-        if self.git_commit != other.git_commit:
-            raise ValueError('ReproducibilityData: Git commit mismatch')
-        if self.git_branch != other.git_branch:
-            raise ValueError('ReproducibilityData: Git branch mismatch')
-        if self.git_dirty != other.git_dirty:
-            raise ValueError('ReproducibilityData: Git dirty state mismatch')
-        if self.config != other.config:
-            raise ValueError('ReproducibilityData: configuration mismatch')
+        if not allow_differing_runs:
+            if self.software_version != other.software_version:
+                raise ValueError('ReproducibilityData: software version mismatch')
+            if self.git_commit != other.git_commit:
+                raise ValueError('ReproducibilityData: Git commit mismatch')
+            if self.git_branch != other.git_branch:
+                raise ValueError('ReproducibilityData: Git branch mismatch')
+            if self.git_dirty != other.git_dirty:
+                raise ValueError('ReproducibilityData: Git dirty state mismatch')
+            if self.config != other.config:
+                raise ValueError('ReproducibilityData: configuration mismatch')
         if self.sample_fraction != other.sample_fraction:
             raise ValueError('ReproducibilityData: sample fraction mismatch')
         if self.sample_seed != other.sample_seed:
@@ -84,13 +97,35 @@ class ReproducibilityData:
         )
 
     @classmethod
-    def union(cls, *data_list: ReproducibilityData) -> ReproducibilityData:
+    def union(
+        cls, *data_list: ReproducibilityData, allow_differing_runs: bool = False
+    ) -> ReproducibilityData:
         """Combine a list of ReproducibilityData instances by merging their file
-        lists and ensuring other fields match (or are compatible)."""
+        lists and ensuring other fields match (or are compatible). See
+        `combine` for `allow_differing_runs`."""
         if not data_list:
             raise ValueError('ReproducibilityData.union: empty data list')
 
-        return functools.reduce(lambda a, b: a | b, data_list)
+        return functools.reduce(
+            lambda a, b: a.combine(b, allow_differing_runs), data_list
+        )
+
+    @classmethod
+    def differences(cls, *data_list: ReproducibilityData) -> dict[str, int]:
+        """The fields that differ between instances that `allow_differing_runs`
+        would accept, with the number of distinct values of each."""
+        counts = {}
+        for name in (
+            'software_version',
+            'git_commit',
+            'git_branch',
+            'git_dirty',
+            'config',
+        ):
+            distinct = len({getattr(d, name) for d in data_list})
+            if distinct > 1:
+                counts[name] = distinct
+        return counts
 
     @classmethod
     def build(

@@ -27,11 +27,23 @@ logger = logging.getLogger(__name__)
     help="""Whether to create a merged (multi-file) store or a combined
     (single-file) store.""",
 )
+@click.option(
+    '--allow-differing-runs',
+    is_flag=True,
+    help="""Accept input stores whose software version, git state or
+    configuration differ, as when they come from independent jobs of one
+    campaign. The first input's values are recorded, and a comment in the output
+    says what differed. The Python version and the sampling must still match.""",
+)
 @click.argument('input-stores', type=click.Path(exists=True), nargs=-1)
-def merge_stores(output_store, merge, input_stores):
+def merge_stores(output_store, merge, allow_differing_runs, input_stores):
     if merge:
-        logger.info(f'Merging trajectory stores: {input_stores}')
-        TrajectoryStore.merge(output_store, input_stores)
+        logger.info(f'Merging trajectory stores: {len(input_stores)} inputs')
+        TrajectoryStore.merge(
+            output_store, input_stores, allow_differing_runs=allow_differing_runs
+        )
     else:
-        logger.info(f'Combining trajectory stores: {input_stores}')
-        TrajectoryStore.combine(output_store, input_stores)
+        logger.info(f'Combining trajectory stores: {len(input_stores)} inputs')
+        TrajectoryStore.combine(
+            output_store, input_stores, allow_differing_runs=allow_differing_runs
+        )

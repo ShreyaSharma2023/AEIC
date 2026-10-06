@@ -821,8 +821,16 @@ class TrajectoryStore:
         comment: str | None = None,
         history: str | None = None,
         source: str | None = None,
+        allow_differing_runs: bool = False,
     ) -> None:
         """Combine multiple `TrajectoryStore` files into a single-file store.
+
+        By default the input stores must come from runs with the same software
+        version, git state and configuration. With `allow_differing_runs`
+        those may differ, as when the stores come from independent jobs of one
+        campaign (each with its own weather directory, say): the first input's
+        values are recorded and a comment lists what differed. The Python
+        version and the sampling must still match.
 
         Combining is done by creating a new NetCDF file and copying data from
         the input stores. This is slower than using `merge` to create a merged
@@ -872,7 +880,16 @@ class TrajectoryStore:
         # Generate combined reproducibility data for the merged store.
         reproducibility_data = None
         if len(repro_data) > 0:
-            reproducibility_data = ReproducibilityData.union(*repro_data)
+            reproducibility_data = ReproducibilityData.union(
+                *repro_data, allow_differing_runs=allow_differing_runs
+            )
+            differences = ReproducibilityData.differences(*repro_data)
+            if differences:
+                comments.append(
+                    'Merged from runs that differ in '
+                    + ', '.join(f'{k} ({v} values)' for k, v in differences.items())
+                    + "; the first input's values are recorded."
+                )
 
         # Create output store.
         with TrajectoryStore.create(
@@ -903,8 +920,16 @@ class TrajectoryStore:
         comment: str | None = None,
         history: str | None = None,
         source: str | None = None,
+        allow_differing_runs: bool = False,
     ) -> None:
         """Merge multiple `TrajectoryStore` files into a single merged store.
+
+        By default the input stores must come from runs with the same software
+        version, git state and configuration. With `allow_differing_runs`
+        those may differ, as when the stores come from independent jobs of one
+        campaign (each with its own weather directory, say): the first input's
+        values are recorded and a comment lists what differed. The Python
+        version and the sampling must still match.
 
         The merging is done simply by copying the individual NetCDF files into
         a directory and creating a metadata JSON file in the same directory to
@@ -925,36 +950,48 @@ class TrajectoryStore:
         # Collect metadata and check that the field sets match.
         store_data = []
         fieldset_names: set[str] | None = None
-        index_groups = []
+        has_index: list[bool] = []
         repro_data: list[ReproducibilityData] = []
         comments: list[str] = []
         assert input_stores is not None
         for input_store in input_stores:
             p = Path(input_store)
-            ts = TrajectoryStore.open(base_file=p)
-            if fieldset_names is None:
-                fieldset_names = set(ts._nc.keys())
-            if fieldset_names != set(ts._nc.keys()):
-                raise ValueError(
-                    'All input TrajectoryStore files must have the same field sets'
-                )
-            store_data.append((p.name, len(ts)))
-            index_groups.append(ts.index_group)
-            if ts.reproducibility_data is not None:
-                repro_data.append(ts.reproducibility_data)
-            for comment in ts.comments:
-                if comment not in comments:
-                    comments.append(comment)
+            # Only metadata is needed from each input, so close it as soon as it
+            # has been read: thousands of inputs open at once crash the NetCDF
+            # library.
+            with TrajectoryStore.open(base_file=p) as ts:
+                if fieldset_names is None:
+                    fieldset_names = set(ts._nc.keys())
+                if fieldset_names != set(ts._nc.keys()):
+                    raise ValueError(
+                        'All input TrajectoryStore files must have the same field sets'
+                    )
+                store_data.append((p.name, len(ts)))
+                has_index.append(ts.index_group is not None)
+                if ts.reproducibility_data is not None:
+                    repro_data.append(ts.reproducibility_data)
+                for comment in ts.comments:
+                    if comment not in comments:
+                        comments.append(comment)
 
         # Check indexability consistency.
-        indexable = all(g is not None for g in index_groups)
-        if indexable != any(g is not None for g in index_groups):
+        indexable = all(has_index)
+        if indexable != any(has_index):
             raise ValueError('Either all or none of the input stores must be indexable')
 
         # Generate combined reproducibility data for the merged store.
         reproducibility_data = None
         if len(repro_data) > 0:
-            reproducibility_data = ReproducibilityData.union(*repro_data)
+            reproducibility_data = ReproducibilityData.union(
+                *repro_data, allow_differing_runs=allow_differing_runs
+            )
+            differences = ReproducibilityData.differences(*repro_data)
+            if differences:
+                comments.append(
+                    'Merged from runs that differ in '
+                    + ', '.join(f'{k} ({v} values)' for k, v in differences.items())
+                    + "; the first input's values are recorded."
+                )
 
         # Move input stores to output directory.
         for input_store in input_stores:
@@ -2478,6 +2515,18 @@ def _check_merge_arguments(
             raise ValueError(
                 'Output TrajectoryStore file must have ".aeic-store" extension'
             )
+        # Merging moves every input into one directory under its own file name,
+        # so two inputs with the same name would replace one another.
+        by_name: dict[str, Path] = {}
+        for p in input_stores:
+            previous = by_name.setdefault(Path(p).name, Path(p))
+            if previous != Path(p):
+                raise ValueError(
+                    f'Merge inputs "{previous}" and "{p}" have the same file name '
+                    f'"{Path(p).name}"; merging moves inputs into one directory by '
+                    'name, so one would replace the other. Rename them to be unique '
+                    'or combine them instead.'
+                )
     else:
         if not str(output_store).endswith('.nc'):
             raise ValueError('Output TrajectoryStore file must have ".nc" extension')
@@ -2492,19 +2541,26 @@ def _create_merged_store_index(output_store: PathType, input_stores: list[PathTy
     index_group = index_dataset.createGroup('_index')
     index_group.createVariable('flight_id', np.int64, ('trajectory',))
     index_group.createVariable('trajectory_index', np.int64, ('trajectory',))
-    flight_ids = []
-    trajectory_indexes = []
+    flight_id_parts: list[np.ndarray] = []
+    trajectory_index_parts: list[np.ndarray] = []
     index_offset = 0
     for input_store in input_stores:
-        ts = TrajectoryStore.open(base_file=Path(output_store) / Path(input_store).name)
-        assert ts.index_group is not None
-        vs = ts.index_group.variables
-        flight_ids += list(vs['flight_id'][:])
-        trajectory_indexes += [idx + index_offset for idx in vs['trajectory_index'][:]]
-        index_offset += len(ts)
-    id_pairs = sorted(zip(trajectory_indexes, flight_ids), key=lambda x: x[1])
-    index_group.variables['flight_id'][:] = [id for _, id in id_pairs]
-    index_group.variables['trajectory_index'][:] = [idx for idx, _ in id_pairs]
+        with TrajectoryStore.open(
+            base_file=Path(output_store) / Path(input_store).name
+        ) as ts:
+            assert ts.index_group is not None
+            vs = ts.index_group.variables
+            flight_id_parts.append(np.asarray(vs['flight_id'][:], dtype=np.int64))
+            trajectory_index_parts.append(
+                np.asarray(vs['trajectory_index'][:], dtype=np.int64) + index_offset
+            )
+            index_offset += len(ts)
+    flight_ids = np.concatenate(flight_id_parts)
+    trajectory_indexes = np.concatenate(trajectory_index_parts)
+    # Stable, so flights with equal ids keep their order, as with `sorted`.
+    order = np.argsort(flight_ids, kind='stable')
+    index_group.variables['flight_id'][:] = flight_ids[order]
+    index_group.variables['trajectory_index'][:] = trajectory_indexes[order]
     index_dataset.close()
 
 
