@@ -192,6 +192,25 @@ def test_using_the_nearest_mach_is_logged_once_per_cell(caplog):
     assert 'FL 400' in messages[0] and '0.800' in messages[0]
 
 
+def test_a_mach_exactly_the_maximum_gap_from_the_only_tabulated_mach_is_accepted():
+    """A heavy aircraft at the top of its envelope can have one tabulated Mach in
+    a cell (PIANO prints only the speed it can sustain). A flight asking for a
+    Mach 0.02 below it is within the gap, which includes its limit, however the
+    subtraction rounds: 0.80 - 0.78 is 0.020000000000000018 in floating point."""
+    table = _sweep_table(drop={(400, 60000.0, 0.70), (400, 60000.0, 0.90)})
+    table = table.assign(mach=table.mach.where(table.mach != 0.80, 0.80))
+    perf = MachSweepInterpolator(table)(400, 60000.0, 0.78)
+
+    assert perf.true_airspeed == pytest.approx(200.0 + 100 * 0.80)
+
+
+def test_a_mach_a_hair_beyond_the_maximum_gap_is_still_rejected():
+    table = _sweep_table(drop={(400, 60000.0, 0.70), (400, 60000.0, 0.90)})
+
+    with pytest.raises(ValueError, match='no cruise data at Mach 0.779'):
+        MachSweepInterpolator(table)(400, 60000.0, 0.779)
+
+
 def test_the_largest_gap_that_is_bridged_can_be_set():
     table = _sweep_table(drop={(400, 60000.0, 0.90)})
 

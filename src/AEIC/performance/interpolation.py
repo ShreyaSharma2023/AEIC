@@ -181,9 +181,9 @@ class MachSweepInterpolator:
 
     def __init__(self, df: pd.DataFrame, max_mach_gap: float = 0.02):
         self.max_mach_gap = max_mach_gap
-        """Largest distance [Mach] outside a cell's tabulated range that the
-        nearest tabulated Mach is still used for. 0.02 is about 6 m/s at
-        cruise altitude."""
+        """Largest distance [Mach] outside a cell's tabulated range, itself
+        included, that the nearest tabulated Mach is still used for. 0.02 is
+        about 6 m/s at cruise altitude."""
         self._warned: set[tuple[float, float]] = set()
         if df.duplicated(subset=['fl', 'mass', 'mach']).any():
             raise ValueError(
@@ -231,7 +231,7 @@ class MachSweepInterpolator:
         machs, values = self._cells[(fl, mass)]
         if mach < machs[0] - self.MACH_TOL or mach > machs[-1] + self.MACH_TOL:
             nearest = float(machs[0] if mach < machs[0] else machs[-1])
-            if abs(mach - nearest) > self.max_mach_gap:
+            if abs(mach - nearest) > self.max_mach_gap + self.MACH_TOL:
                 raise ValueError(
                     f'no cruise data at Mach {mach:.3f} for FL {fl:g} and mass '
                     f'{mass:g} kg: tabulated range is {machs[0]:.3f}-{machs[-1]:.3f}'
