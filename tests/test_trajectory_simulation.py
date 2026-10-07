@@ -164,6 +164,78 @@ def test_trajectory_mass_iter(performance_model, example_mission, iteration_para
     assert final_mass_residual < iteration_params['test_reltol']
 
 
+def _with_residuals(monkeypatch, residuals):
+    """Make each flown iteration report the next residual of `residuals`, and
+    record how many iterations were flown."""
+    flown = []
+    real = tb.Builder._fly_iteration
+
+    def fake(self):
+        traj, _ = real(self)
+        flown.append(1)
+        return traj, residuals[len(flown) - 1]
+
+    monkeypatch.setattr(tb.Builder, '_fly_iteration', fake)
+    return flown
+
+
+def test_mass_iter_accepts_a_flight_that_converges_on_its_last_iteration(
+    performance_model, example_mission, monkeypatch
+):
+    """The last iteration allowed is flown like any other, so its residual must
+    be checked too: a flight within tolerance is not a failure just because it
+    used up the iterations."""
+    flown = _with_residuals(monkeypatch, [0.5, 0.4, 0.004])
+    builder = tb.LegacyBuilder(
+        options=tb.Options(iterate_mass=True, max_mass_iters=3, mass_iter_reltol=1e-2)
+    )
+
+    traj = builder.fly(performance_model, example_mission)
+
+    assert len(traj) > 0
+    assert len(flown) == 3
+
+
+def test_mass_iter_stops_at_the_first_iteration_within_tolerance(
+    performance_model, example_mission, monkeypatch
+):
+    flown = _with_residuals(monkeypatch, [0.5, 0.004, 0.001, 0.0005])
+    builder = tb.LegacyBuilder(
+        options=tb.Options(iterate_mass=True, max_mass_iters=4, mass_iter_reltol=1e-2)
+    )
+
+    builder.fly(performance_model, example_mission)
+
+    assert len(flown) == 2
+
+
+def test_mass_iter_still_fails_when_the_last_iteration_is_out_of_tolerance(
+    performance_model, example_mission, monkeypatch
+):
+    flown = _with_residuals(monkeypatch, [0.5, 0.4, 0.03])
+    builder = tb.LegacyBuilder(
+        options=tb.Options(iterate_mass=True, max_mass_iters=3, mass_iter_reltol=1e-2)
+    )
+
+    with pytest.raises(RuntimeError, match=r'Mass iteration failed.*3\.00e-02'):
+        builder.fly(performance_model, example_mission)
+
+    assert len(flown) == 3
+
+
+def test_mass_iter_with_a_single_iteration_accepts_a_converged_start(
+    performance_model, example_mission, monkeypatch
+):
+    flown = _with_residuals(monkeypatch, [0.004])
+    builder = tb.LegacyBuilder(
+        options=tb.Options(iterate_mass=True, max_mass_iters=1, mass_iter_reltol=1e-2)
+    )
+
+    builder.fly(performance_model, example_mission)
+
+    assert len(flown) == 1
+
+
 def test_trajectory_mass_iter_fail(
     performance_model, example_mission, iteration_params
 ):
@@ -182,13 +254,14 @@ def test_trajectory_mass_iter_fail(
 
 
 # Empirical baseline: with `mass_iter_reltol=1e-6` against the sample
-# performance model, the BOS→LAX `example_mission` first converges at
-# `max_mass_iters=7`. The boundary test below pins both directions:
-# `max_mass_iters=6` must raise, `max_mass_iters=7` must succeed. A
-# regression that shifted the iteration count by one would land here
-# rather than slipping through the loose `max_mass_iters=1` failure case
-# and the (pre-fix) `max_mass_iters=1000` success case.
-_MIN_ITERS_TO_CONVERGE = 7
+# performance model, the BOS→LAX `example_mission` meets the tolerance on its
+# 6th flown iteration. The boundary test below pins both directions:
+# `max_mass_iters=5` must raise, `max_mass_iters=6` must succeed. (This was 7
+# while the residual of the last allowed iteration went unchecked, so a flight
+# that met the tolerance on that iteration was reported as a failure.) A
+# regression that shifted the iteration count by one would land here rather
+# than slipping through the loose `max_mass_iters=1` failure case.
+_MIN_ITERS_TO_CONVERGE = 6
 
 
 @pytest.mark.parametrize(

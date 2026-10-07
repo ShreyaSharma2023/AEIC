@@ -278,27 +278,22 @@ class Builder(ABC):
 
     def _iterate_mass(self) -> Trajectory:
         """Iterate on starting mass to minimize residual fuel mass."""
-        mass_converged = False
         iter = 1
         traj, mass_res = self._fly_iteration()
-        while not mass_converged and iter < self.options.max_mass_iters:
-            # Keep the calculated trajectory if the mass is sufficiently
-            # small.
-            if abs(mass_res) < self.options.mass_iter_reltol:
-                mass_converged = True
-            else:
-                # Perform a "dumb" correction of the starting mass.
-                self.starting_mass -= mass_res * self.total_fuel_mass
-                self.total_fuel_mass -= mass_res * self.total_fuel_mass
+        # Every flown trajectory is checked, including the last one allowed:
+        # a flight that meets the tolerance on its last iteration has converged.
+        while abs(mass_res) >= self.options.mass_iter_reltol:
+            if iter >= self.options.max_mass_iters:
+                raise RuntimeError(
+                    "Mass iteration failed to converge; final residual "
+                    f"{mass_res:.2e} > {self.options.mass_iter_reltol:.2e}"
+                )
+            # Perform a "dumb" correction of the starting mass.
+            self.starting_mass -= mass_res * self.total_fuel_mass
+            self.total_fuel_mass -= mass_res * self.total_fuel_mass
 
-                traj, mass_res = self._fly_iteration()
-                iter += 1
-
-        if not mass_converged:
-            raise RuntimeError(
-                "Mass iteration failed to converge; final residual "
-                f"{mass_res:.2e} > {self.options.mass_iter_reltol:.2e}"
-            )
+            traj, mass_res = self._fly_iteration()
+            iter += 1
 
         return traj
 
