@@ -51,6 +51,7 @@ ROW = {
     'op_climb_cas_kts': '300',
     'op_descent_mach': '0.780',
     'op_descent_cas_kts': '290',
+    'apu_name': 'APU 131-9',
 }
 
 
@@ -479,3 +480,70 @@ def test_rows_of_one_airframe_that_disagree_are_an_error(tmp_path):
 
     with pytest.raises(ValueError, match=f'{SAVE_AS}.*oew_kg'):
         read_airframes(table)
+
+
+###########################################
+######   APU                         ######
+###########################################
+
+
+def test_the_model_names_the_apu_of_the_airframe_row(manifest, piano_root, tmp_path):
+    key = f'{SAVE_AS}_{EDB_UID}'
+
+    batch([key], manifest, piano_root, tmp_path)
+
+    model = PerformanceModel.load(tmp_path / 'models' / f'{key}.toml')
+    assert model.apu_name == 'APU 131-9'
+    assert model.apu is not None and model.apu.fuel_kg_per_s > 0
+
+
+def _with_apu(tmp_path, apu_name):
+    path = tmp_path / 'airframes.csv'
+    with open(path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=list(ROW))
+        writer.writeheader()
+        writer.writerow({**ROW, 'apu_name': apu_name})
+    return path
+
+
+@pytest.mark.parametrize('apu_name', ['', '   '])
+def test_a_blank_apu_is_a_build_failure_naming_the_airframe(
+    piano_root, tmp_path, apu_name
+):
+    """No APU emissions would be computed for the model, silently."""
+    key = f'{SAVE_AS}_{EDB_UID}'
+
+    report = batch([key], _with_apu(tmp_path, apu_name), piano_root, tmp_path)
+
+    assert report.built == []
+    assert SAVE_AS in report.failed[key] and 'apu_name' in report.failed[key]
+
+
+def test_an_apu_that_is_not_in_the_apu_database_is_a_build_failure(
+    piano_root, tmp_path
+):
+    """AEIC would otherwise use a zero-emission APU with only a warning."""
+    key = f'{SAVE_AS}_{EDB_UID}'
+
+    report = batch([key], _with_apu(tmp_path, 'APU 999-X'), piano_root, tmp_path)
+
+    assert report.built == []
+    assert 'APU 999-X' in report.failed[key]
+
+
+def test_the_explicit_no_apu_entry_is_accepted(piano_root, tmp_path):
+    """The APU database has a "None" APU for an aircraft that has none."""
+    key = f'{SAVE_AS}_{EDB_UID}'
+
+    report = batch([key], _with_apu(tmp_path, 'None'), piano_root, tmp_path)
+
+    assert report.built == [key]
+
+
+def test_an_airframe_table_without_an_apu_column_is_an_error(tmp_path):
+    path = tmp_path / 'bad.csv'
+    fields = [c for c in ROW if c != 'apu_name']
+    path.write_text(','.join(fields) + '\n' + ','.join(ROW[c] for c in fields) + '\n')
+
+    with pytest.raises(ValueError, match='apu_name'):
+        read_airframes(path)

@@ -22,6 +22,7 @@ from pathlib import Path
 
 from AEIC.parsers.piano_reader import PianoData, PianoOverrides
 from AEIC.parsers.piano_reader.plane_file import read_operating_empty_mass
+from AEIC.performance.apu import lookup_apu
 from AEIC.performance.edb import EDBEntry
 from AEIC.performance.model_builder import build_piano_model, write_performance_model
 from AEIC.performance.models.base import LTOPerformanceInput
@@ -47,6 +48,7 @@ REQUIRED_COLUMNS = (
     'op_climb_cas_kts',
     'op_descent_mach',
     'op_descent_cas_kts',
+    'apu_name',
 )
 
 LOW_CAS_KTS = 250.0
@@ -213,6 +215,27 @@ def cruise_speeds(row: dict[str, str]) -> SpeedData:
     )
 
 
+def _apu_name(row: dict[str, str]) -> str:
+    """The airframe's APU, which must be in the APU database.
+
+    AEIC computes APU emissions only for a model that names one, and treats an
+    unknown name as an APU with no emissions, so a blank or misspelt name would
+    silently drop them. The database's "None" entry says an aircraft has none.
+
+    Raises:
+        ValueError: If the name is blank or not in the APU database.
+    """
+    name = row['apu_name'].strip()
+    if not name:
+        raise ValueError(
+            f'{row["save_as"]}: "apu_name" is blank in the airframe table; use '
+            '"None" for an aircraft with no APU'
+        )
+    if lookup_apu(name) is None:
+        raise ValueError(f'{row["save_as"]}: APU "{name}" is not in the APU database')
+    return name
+
+
 def _operating_empty_mass(row: dict[str, str], plane_files_dir: Path | None) -> float:
     """The table's value, else the plane file's ``*freeze-oew*``."""
     if row['oew_kg'].strip():
@@ -372,6 +395,7 @@ def run_batch(
                 maximum_payload=int(float(row['max_payload_kg'])),
                 operating_empty_mass=_operating_empty_mass(row, plane_dir),
                 cruise_speeds=cruise_speeds(row),
+                apu_name=_apu_name(row),
             )
             write_performance_model(target, model)
         except (ValueError, OSError) as exc:
