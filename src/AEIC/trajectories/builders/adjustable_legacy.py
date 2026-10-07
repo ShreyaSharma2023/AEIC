@@ -1,6 +1,7 @@
 # TODO: Remove this when we move to Python 3.14+.
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -14,6 +15,7 @@ from AEIC.performance.types import AircraftState, SimpleFlightRules
 from AEIC.storage import FlightPhase
 from AEIC.units import (
     FEET_TO_METERS,
+    FL_TO_METERS,
     METERS_TO_FL,
     MINUTES_TO_SECONDS,
     NAUTICAL_MILES_TO_METERS,
@@ -298,8 +300,19 @@ class AdjustableLegacyContext(Context):
         if self.clm_start_altitude >= ac_performance.maximum_altitude:
             self.clm_start_altitude = mission.origin_position.altitude
 
-        # Cruise altitude is the operating ceiling - 7000 feet (adjustable).
-        if cruise_altitude is None:
+        # Cruise altitude is the mission's flight level if it has one, else the
+        # operating ceiling - 7000 feet (adjustable). The flight level is a
+        # target: one above the ceiling is flown at the ceiling, and a route too
+        # short to reach it climbs only as high as it can (the apex below). The
+        # builder counts both, and the missions with no flight level.
+        cruise_altitude_limit: str | None = None
+        if cruise_altitude is None and mission.flight_level is not None:
+            self.crz_start_altitude = mission.flight_level * FL_TO_METERS
+            if self.crz_start_altitude > ac_performance.maximum_altitude:
+                self.crz_start_altitude = ac_performance.maximum_altitude
+                cruise_altitude_limit = 'ceiling'
+        elif cruise_altitude is None:
+            cruise_altitude_limit = 'no_flight_level'
             self.crz_start_altitude = (
                 ac_performance.maximum_altitude - 7000.0 * FEET_TO_METERS
             )
@@ -367,6 +380,9 @@ class AdjustableLegacyContext(Context):
         # whether the apex may be changed at all (see `lower_apex`).
         self.apex_route_distance = ground_track.total_distance
         self.apex_is_adjustable = cruise_altitude is None and descent_distance is None
+        # The apex of a short route is never above the cruise altitude the
+        # flight would have had with room to cruise.
+        self.apex_ceiling = self.crz_start_altitude
 
         # A route too short to reach the normal cruise altitude and still
         # leave room for any cruise would overshoot the destination: the
@@ -396,6 +412,10 @@ class AdjustableLegacyContext(Context):
                     self.des_end_altitude,
                     builder.altitude_step,
                 )
+                cruise_altitude_limit = 'route'
+
+        if cruise_altitude_limit is not None:
+            builder.cruise_altitude_limits[cruise_altitude_limit] += 1
 
         # Initialize weather regridding when requested.
         self.weather: Weather | None = None
@@ -440,12 +460,15 @@ class AdjustableLegacyContext(Context):
         if not self.apex_is_adjustable:
             return False
         self.apex_route_distance -= overshoot * APEX_OVERCORRECTION
-        self.crz_start_altitude = no_cruise_apex_altitude(
-            self.ac_performance,
-            self.apex_route_distance,
-            self.clm_start_altitude,
-            self.des_end_altitude,
-            self.builder.altitude_step,
+        self.crz_start_altitude = min(
+            no_cruise_apex_altitude(
+                self.ac_performance,
+                self.apex_route_distance,
+                self.clm_start_altitude,
+                self.des_end_altitude,
+                self.builder.altitude_step,
+            ),
+            self.apex_ceiling,
         )
         self.des_start_altitude = self.crz_start_altitude
         self.descent_dist_approx = flown_descent_distance(
@@ -503,6 +526,11 @@ class AdjustableLegacyBuilder(Builder):
         self.descent_distance_from_model = getattr(
             legacy_options, 'descent_distance_from_model', False
         )
+        # How many flights did not cruise at their mission's flight level, by
+        # reason: 'ceiling' (level above the model's ceiling), 'route' (too
+        # short to reach it) and 'no_flight_level' (the mission has none, so
+        # the ceiling less 7000 ft was used).
+        self.cruise_altitude_limits: Counter[str] = Counter()
 
     def calc_starting_mass(self) -> float:
         """Calculates the starting mass using AEIC v2 methods.

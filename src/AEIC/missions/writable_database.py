@@ -552,7 +552,8 @@ class WritableDatabase(Database):
             departure_timestamp INTEGER NOT NULL,
             arrival_timestamp INTEGER NOT NULL,
             day INTEGER NOT NULL,
-            flight_id INTEGER NOT NULL REFERENCES flights(id)
+            flight_id INTEGER NOT NULL REFERENCES flights(id),
+            flight_level REAL
           )""")
 
         cur.execute("""

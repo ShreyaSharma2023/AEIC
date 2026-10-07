@@ -211,6 +211,16 @@ def simulate_slice(
             p.close()
 
             # Return information passed back through the process pool future.
+            limits = getattr(builder, 'cruise_altitude_limits', None)
+            if limits is not None:
+                logger.info(
+                    'Flights not at their database flight level: %s at the model '
+                    'ceiling, %s on routes too short to reach it, %s with no '
+                    'flight level.',
+                    limits['ceiling'],
+                    limits['route'],
+                    limits['no_flight_level'],
+                )
             logger.info(f'Slice {slice_idx} complete: {nfailed} failed simulations.')
 
 

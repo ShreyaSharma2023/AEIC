@@ -75,6 +75,11 @@ class Mission:
     performance model); falls back to `aircraft_type` in the selector when
     None."""
 
+    flight_level: float | None = None
+    """Cruise flight level (hundreds of feet of pressure altitude) of this
+    flight, or None if the mission database gives none. The adjustable builder
+    aims to cruise at it."""
+
     @staticmethod
     def _airport_position(code: str) -> Position:
         ap = airport(code)

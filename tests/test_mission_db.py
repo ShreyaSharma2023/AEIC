@@ -143,7 +143,8 @@ def test_query():
         'ao.iata_code AS origin, ao.country AS origin_country, '
         'ad.iata_code AS destination, ad.country AS destination_country, '
         'f.service_type, f.aircraft_type, f.engine_type, '
-        'f.distance, f.seat_capacity, f.performance_model_key '
+        'f.distance, f.seat_capacity, f.performance_model_key, '
+        's.flight_level '
         'FROM schedules s '
         'JOIN flights f ON f.id = s.flight_id '
         'JOIN airports ao ON f.origin = ao.id '
@@ -334,7 +335,7 @@ def test_mission_from_query_result_row():
     # (departure_ts, arrival_ts, schedule_id, flight_id, carrier,
     #  flight_number, origin_iata, origin_country, destination_iata,
     #  destination_country, service_type, aircraft_type, engine_type,
-    #  distance, seat_capacity, performance_model_key)
+    #  distance, seat_capacity, performance_model_key, flight_level)
     dep_ts = int(date_to_timestamp(date(2024, 6, 1)).timestamp())
     arr_ts = dep_ts + 6 * 3600
     row = (
@@ -354,6 +355,7 @@ def test_mission_from_query_result_row():
         4170,
         180,
         'B738_CFM56',
+        350.0,
     )
 
     mission = QueryResult.from_row(row)
@@ -373,6 +375,7 @@ def test_mission_from_query_result_row():
     # OAG data has no load factor, so the SUT inserts 1.0 as a placeholder.
     assert mission.load_factor == 1.0
     assert mission.performance_model_key == 'B738_CFM56'
+    assert mission.flight_level == 350.0
     # Timestamps survive the int → UTC pd.Timestamp round-trip.
     assert mission.departure == pd.Timestamp(dep_ts, unit='s', tz='UTC')
     assert mission.arrival == pd.Timestamp(arr_ts, unit='s', tz='UTC')

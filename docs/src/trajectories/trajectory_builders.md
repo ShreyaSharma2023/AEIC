@@ -209,6 +209,15 @@ This removes the error that comes from the estimate. It does not correct for
 wind, which changes the ground distance covered in the descent, or for routes too
 short to contain a cruise segment.
 
+The builder aims to cruise at the mission's `flight_level` (which a mission database
+supplies per scheduled flight in `schedules.flight_level`), and at the model's ceiling
+less 7000 ft for a mission with none. The level is a target held for the whole cruise,
+with no step climbs. A level above the model's ceiling is flown at the ceiling, and a
+route too short to reach the level climbs only as high as it can; the builder counts
+both, and the missions with no level, in `cruise_altitude_limits` (`'ceiling'`,
+`'route'` and `'no_flight_level'`). An explicit `cruise_altitude` adjustment takes
+precedence.
+
 ```{eval-rst}
 .. automodule:: AEIC.trajectories.builders.adjustable_legacy
    :members:

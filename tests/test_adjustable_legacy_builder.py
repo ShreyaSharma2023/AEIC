@@ -517,7 +517,7 @@ def test_a_route_with_cruise_is_not_changed_by_the_no_cruise_correction(
     assert abs(_miss(traj, mission)) < 1000.0
 
 
-def _apex_context(performance_model, route_distance):
+def _apex_context(performance_model, route_distance, apex_ceiling=float('inf')):
     """Just the attributes `lower_apex` reads and writes."""
     from types import SimpleNamespace
 
@@ -532,6 +532,7 @@ def _apex_context(performance_model, route_distance):
         crz_start_altitude=None,
         des_start_altitude=None,
         descent_dist_approx=None,
+        apex_ceiling=apex_ceiling,
     )
 
 
@@ -560,3 +561,20 @@ def test_a_larger_overshoot_lowers_the_apex_more(performance_model):
     AdjustableLegacyContext.lower_apex(large, 6_000.0)
 
     assert large.crz_start_altitude < small.crz_start_altitude
+
+
+def test_the_apex_is_never_raised_above_the_cruise_altitude_it_replaced(
+    performance_model,
+):
+    """A flight that lands short has its apex sized for a longer route, which
+    raises it. With room to cruise it would have cruised at its normal altitude,
+    so that is the most the apex may reach."""
+    free = _apex_context(performance_model, 200_000.0)
+    capped = _apex_context(performance_model, 200_000.0, apex_ceiling=5000.0)
+
+    AdjustableLegacyContext.lower_apex(free, -100_000.0)
+    AdjustableLegacyContext.lower_apex(capped, -100_000.0)
+
+    assert free.crz_start_altitude > 5000.0
+    assert capped.crz_start_altitude == 5000.0
+    assert capped.des_start_altitude == 5000.0
