@@ -28,6 +28,23 @@ from AEIC.utils.geos_levels import AP_HPA, BP
 logger = logging.getLogger(__name__)
 
 
+def _species_units(sp: Species) -> str:
+    """Units of a species' gridded emissions.
+
+    Every emission is a mass in grams, except nvPM_N, whose emission index is
+    in particles per kg of fuel, so its emissions are a number of particles
+    ('1', the CF units of a count).
+    """
+    return '1' if sp == Species.nvPM_N else 'g'
+
+
+def _species_description(sp: Species, what: str = 'emissions') -> str:
+    description = f'Gridded {sp.name} {what}'
+    return (
+        f'{description} (number of particles)' if sp == Species.nvPM_N else description
+    )
+
+
 @dataclass
 class OutputGrid:
     """Accumulated gridded emissions ready to be written to a NetCDF file.
@@ -182,9 +199,9 @@ class OutputGrid:
                     f'Unsupported altitude grid type: {type(alt).__name__}.'
                 )
 
-            # Per-species emissions variables. Units come from EMISSIONS_FIELDS
-            # in AEIC.emissions.emission (trajectory_emissions is in grams).
-            # The accumulator is laid out as (lat, lon, vert, species). After
+            # Per-species emissions variables, in grams (a number of particles
+            # for nvPM_N: see _species_units). The accumulator is laid out as
+            # (lat, lon, vert, species). After
             # transposing to (vert, lat, lon), pressure grids need a vertical
             # flip so the output matches the descending-pressure ERA5 convention
             # (the kernel bins in ascending pressure order).
@@ -197,15 +214,14 @@ class OutputGrid:
                     complevel=4,
                     shuffle=True,
                 )
-                var.units = 'g'
-                var.description = f'Gridded {sp.name} emissions'
+                var.units = _species_units(sp)
+                var.description = _species_description(sp)
                 slab = self.accum[..., i].transpose(2, 0, 1)
                 if isinstance(alt, PRESSURE_GRIDS):
                     slab = slab[::-1, :, :]
                 var[0, :, :, :] = slab
 
-            # Per-species LTO emissions variables. Units come from EMISSIONS_FIELDS
-            # in AEIC.emissions.emission (trajectory_emissions is in grams).
+            # Per-species LTO emissions variables (same units as above).
             for i, sp in enumerate(self.species):
                 var = ds.createVariable(
                     f'{sp.name.lower()}_lto',
@@ -215,8 +231,8 @@ class OutputGrid:
                     complevel=4,
                     shuffle=True,
                 )
-                var.units = 'g'
-                var.description = f'Gridded {sp.name} LTO emissions'
+                var.units = _species_units(sp)
+                var.description = _species_description(sp, 'LTO emissions')
                 var[0, :, :] = self.lto_accum[..., i]
 
             # Minimal global attributes for quick identification.

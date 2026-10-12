@@ -218,6 +218,45 @@ def test_reduce_phase_happy_path(tmp_path):
         assert 'altitude_bnds' in ds.variables
 
 
+def test_reduce_phase_number_species_units(tmp_path):
+    # Every species is a mass in grams except nvPM_N, which is a number of
+    # particles; the output files must not label it as grams.
+    grid = Grid.load(config.file_location('grids/basic-4x4.toml'))
+    species = [Species.CO2, Species.nvPM, Species.nvPM_N]
+    nspecies = len(species)
+    lto_data = np.full(
+        (grid.latitude.bins, grid.longitude.bins, nspecies), 1.0, dtype=np.float32
+    )
+    map_prefix = str(tmp_path / 'map')
+    _write_zarr_slice(
+        f'{map_prefix}-00000.zarr',
+        np.full(grid.shape + (nspecies,), 2.0, dtype=np.float32),
+        lto_data=lto_data,
+        grid=grid,
+    )
+    db_path = tmp_path / 'missions.sqlite'
+    _make_mission_db(db_path, [1546300800, 1577836799])
+
+    output_file = tmp_path / 'out.nc'
+    reduce_phase(
+        grid,
+        species,
+        map_prefix,
+        output_file,
+        db_path,
+        tmp_path / 'fake_store.nc',
+        traj_repro=None,
+        traj_comments=[],
+    )
+
+    with nc4.Dataset(str(output_file), keepweakref=True) as ds:
+        for name, units in (('co2', 'g'), ('nvpm', 'g'), ('nvpm_n', '1')):
+            assert ds.variables[name].units == units, name
+            assert ds.variables[f'{name}_lto'].units == units, f'{name}_lto'
+        assert 'particles' in ds.variables['nvpm_n'].description
+        assert 'particles' in ds.variables['nvpm_n_lto'].description
+
+
 def test_reduce_phase_pressure_grid(tmp_path):
     grid_file = config.file_location('grids/basic-1x1-isa-pressure.toml')
     grid = Grid.load(grid_file)
