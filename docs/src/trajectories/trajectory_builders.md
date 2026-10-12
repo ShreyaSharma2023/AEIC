@@ -206,8 +206,33 @@ builder = tb.AdjustableLegacyBuilder(
 ```
 
 This removes the error that comes from the estimate. It does not correct for
-wind, which changes the ground distance covered in the descent, or for routes too
+wind (see wind-aware apex below), which changes the ground distance covered in the descent, or for routes too
 short to contain a cruise segment.
+
+### Wind-aware apex
+
+The climb and descent estimates, and the apex of a route too short to cruise,
+are made with no wind by default, so in a wind the flown climb and descent cover
+more or less ground than expected. On a short route this can be a large share of
+its length. Setting `wind_aware_apex` in `AdjustableLegacyOptions` (it needs
+`use_weather`) makes the estimates in the wind along the route at the departure
+time: the climb from the start of the route, and the descent back from the
+destination, found as the descent that is consistent with where it starts.
+
+### Consistent starting mass
+
+The starting mass is estimated from the empty mass, the payload, the trip fuel,
+the reserve (5% of it), and the diversion and hold fuel, and capped at the
+model's maximum mass. Mass iteration then subtracts the shortfall of the trip
+fuel from the start, which is only right if the start was the sum of those parts;
+for long flights the estimate is about twice the burn and the start was capped, so
+the iteration is slow and can end with a flight that lands lighter than its empty
+mass plus payload. Setting `consistent_starting_mass` instead sets the trip fuel to
+the fuel burned and the start to the fixed part plus that fuel plus the reserve
+recomputed from it. A flight whose start would then exceed the maximum mass flies at
+it with the payload reduced by the excess, recorded as the trajectory's `payload_mass`
+(unset otherwise); if even no payload fits it is an error. Adding the field changes the
+base field set, so trajectory files written before it do not open.
 
 The builder aims to cruise at the mission's `flight_level` (which a mission database
 supplies per scheduled flight in `schedules.flight_level`), and at the model's ceiling

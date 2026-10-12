@@ -48,6 +48,9 @@ gridding.
 | `--builder` | `legacy` or `adjustable` | No | `legacy` | Trajectory builder. The legacy builder reproduces the legacy code and only flies legacy (BADA-derived) performance models. The adjustable builder also flies others, such as PIANO models. |
 | `--iterate-mass` / `--no-iterate-mass` | Flag | No | `--no-iterate-mass` | Iterate the starting mass until the fuel burned matches the fuel loaded. |
 | `--descent-distance-from-model` | Flag | No | Off | Estimate the descent distance by flying the descent on the performance model, instead of the legacy static rule that makes flights land short of the destination. Needs `--builder adjustable`. |
+| `--wind-aware-apex` | Flag | No | Off | Size the climb, the descent and the apex of a short route in the wind the flight will meet instead of with no wind. Needs `--builder adjustable` and weather. |
+| `--consistent-starting-mass` | Flag | No | Off | Iterate the starting mass as fixed mass + fuel burned + reserve; a flight that would exceed the maximum mass flies at it with less payload, recorded as `payload_mass`. Needs `--builder adjustable` and `--iterate-mass`. |
+| `--max-mass-iterations` | Integer | No | `5` | Maximum number of mass iterations. |
 
 ```{note}
 Exactly one of `--performance-selector-dir` or `--performance-model-file` must

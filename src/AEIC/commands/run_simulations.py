@@ -30,34 +30,48 @@ def make_trajectory_builder(
     use_weather: bool = False,
     descent_distance_from_model: bool = False,
     iterate_ground_distance: bool = False,
+    wind_aware_apex: bool = False,
+    consistent_starting_mass: bool = False,
+    max_mass_iterations: int | None = None,
 ) -> tb.Builder:
     """Make the trajectory builder for a run.
 
     `legacy` is `LegacyBuilder`, which reproduces the legacy code and only flies
     the legacy (BADA-derived) performance models. `adjustable` is
     `AdjustableLegacyBuilder`, which reproduces it by default but also flies
-    other model types, and supports `descent_distance_from_model`. Asking for
-    that option with the legacy builder is an error, not something to ignore.
+    other model types, and supports `descent_distance_from_model`,
+    `wind_aware_apex` and `consistent_starting_mass`. Asking for any of those
+    with the legacy builder is an error, not something to ignore.
+
+    `max_mass_iterations` is left at the default of `Options` when not given.
     """
     options = tb.Options(
         iterate_mass=iterate_mass,
         use_weather=use_weather,
         iterate_ground_distance=iterate_ground_distance,
     )
+    if max_mass_iterations is not None:
+        options.max_mass_iters = max_mass_iterations
     match builder:
         case 'legacy':
-            if descent_distance_from_model:
-                raise ValueError(
-                    'Estimating the descent distance from the performance model '
-                    'needs --builder adjustable: LegacyBuilder reproduces the '
-                    'legacy code and does not support it.'
-                )
+            for name, requested in (
+                ('descent_distance_from_model', descent_distance_from_model),
+                ('wind_aware_apex', wind_aware_apex),
+                ('consistent_starting_mass', consistent_starting_mass),
+            ):
+                if requested:
+                    raise ValueError(
+                        f'{name} needs --builder adjustable: LegacyBuilder '
+                        'reproduces the legacy code and does not support it.'
+                    )
             return tb.LegacyBuilder(options=options)
         case 'adjustable':
             return tb.AdjustableLegacyBuilder(
                 options=options,
                 legacy_options=tb.AdjustableLegacyOptions(
-                    descent_distance_from_model=descent_distance_from_model
+                    descent_distance_from_model=descent_distance_from_model,
+                    wind_aware_apex=wind_aware_apex,
+                    consistent_starting_mass=consistent_starting_mass,
                 ),
             )
         case _:
@@ -306,6 +320,26 @@ def simulate_slice(
     'the destination. Needs --builder adjustable.',
 )
 @click.option(
+    '--wind-aware-apex',
+    is_flag=True,
+    help='Size the climb, the descent and the apex of a short route in the wind '
+    'the flight will meet. Needs --builder adjustable and weather.',
+)
+@click.option(
+    '--consistent-starting-mass',
+    is_flag=True,
+    help='Iterate the starting mass as fixed mass + fuel burned + reserve, and '
+    'fly a flight that would exceed the maximum mass at that mass with less '
+    'payload (recorded as payload_mass). Needs --builder adjustable and '
+    '--iterate-mass.',
+)
+@click.option(
+    '--max-mass-iterations',
+    type=click.IntRange(min=1),
+    default=None,
+    help='Maximum number of mass iterations. Defaults to the builder default of 5.',
+)
+@click.option(
     '--iterate-ground-distance',
     is_flag=True,
     help='Iterate the descent-distance estimate that decides where cruise ends '
@@ -356,6 +390,9 @@ def run_simulations(
     builder_name: str,
     iterate_mass: bool,
     descent_distance_from_model: bool,
+    wind_aware_apex: bool,
+    consistent_starting_mass: bool,
+    max_mass_iterations: int | None,
     iterate_ground_distance: bool,
     load_factor_file: Path | None,
     departure_date: datetime | None,
@@ -422,6 +459,9 @@ def run_simulations(
                 use_weather=config.weather.use_weather,
                 descent_distance_from_model=descent_distance_from_model,
                 iterate_ground_distance=iterate_ground_distance,
+                wind_aware_apex=wind_aware_apex,
+                consistent_starting_mass=consistent_starting_mass,
+                max_mass_iterations=max_mass_iterations,
             )
         except ValueError as exc:
             raise click.UsageError(str(exc)) from exc

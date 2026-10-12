@@ -62,6 +62,52 @@ def test_estimating_the_descent_from_the_model_is_an_error_for_the_legacy_builde
         make_trajectory_builder('legacy', descent_distance_from_model=True)
 
 
+def test_the_wind_aware_apex_reaches_the_adjustable_builder():
+    builder = make_trajectory_builder(
+        'adjustable', use_weather=True, wind_aware_apex=True
+    )
+
+    assert builder.wind_aware_apex is True
+    assert make_trajectory_builder('adjustable').wind_aware_apex is False
+
+
+def test_the_wind_aware_apex_without_weather_is_an_error():
+    with pytest.raises(ValueError, match='weather'):
+        make_trajectory_builder('adjustable', wind_aware_apex=True)
+
+
+def test_the_consistent_starting_mass_reaches_the_adjustable_builder():
+    builder = make_trajectory_builder('adjustable', consistent_starting_mass=True)
+
+    assert builder.consistent_starting_mass is True
+    assert make_trajectory_builder('adjustable').consistent_starting_mass is False
+
+
+@pytest.mark.parametrize(
+    'option',
+    ['descent_distance_from_model', 'wind_aware_apex', 'consistent_starting_mass'],
+)
+def test_the_adjustable_builder_options_are_an_error_for_the_legacy_builder(option):
+    with pytest.raises(ValueError, match='--builder adjustable'):
+        make_trajectory_builder('legacy', **{option: True})
+
+
+@pytest.mark.parametrize('builder_name', ['legacy', 'adjustable'])
+def test_the_mass_iteration_limit_reaches_the_builder_options(builder_name):
+    assert (
+        make_trajectory_builder(
+            builder_name, max_mass_iterations=10
+        ).options.max_mass_iters
+        == 10
+    )
+    # Left alone, it is the default, which LegacyBuilder's reproduction of the
+    # legacy code relies on.
+    assert (
+        make_trajectory_builder(builder_name).options.max_mass_iters
+        == tb.Options().max_mass_iters
+    )
+
+
 def test_an_unknown_builder_is_an_error():
     with pytest.raises(ValueError, match="Unknown trajectory builder: 'dymos'"):
         make_trajectory_builder('dymos')
@@ -77,6 +123,9 @@ def test_the_options_are_on_the_command_line():
         '--iterate-mass',
         '--no-iterate-mass',
         '--descent-distance-from-model',
+        '--wind-aware-apex',
+        '--consistent-starting-mass',
+        '--max-mass-iterations',
         '--load-factor-file',
         '--departure-date',
         '--model-cache-size',
