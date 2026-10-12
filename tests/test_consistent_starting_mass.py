@@ -81,3 +81,76 @@ def test_the_reserve_adjustment_is_given_the_trip_fuel_of_each_iteration(
         fixed + traj.total_fuel_mass + reserve(None, None, None, traj.total_fuel_mass),
         abs=1.0,
     )
+
+
+# A flight that cannot carry its full payload: the heaviest the aircraft is
+# tabulated at is reached before the payload, the fuel, the reserve, the
+# diversion and the hold fit.
+
+
+def heavy_flight(performance, load_factor=1.0, destination='LAX', **kwargs):
+    builder = tb.AdjustableLegacyBuilder(
+        options=tb.Options(iterate_mass=True, max_mass_iters=30),
+        legacy_options=tb.AdjustableLegacyOptions(consistent_starting_mass=True),
+    )
+    flight = mission(destination=destination)
+    flight.load_factor = load_factor
+    return builder.fly(performance, flight, **kwargs)
+
+
+def diversion_and_hold_mass(performance):
+    """Everything in the starting mass but the empty mass, the payload, the trip
+    fuel and the reserve, found from the uniterated estimate of an empty
+    aircraft."""
+    builder = tb.AdjustableLegacyBuilder(
+        options=tb.Options(iterate_mass=False),
+        legacy_options=tb.AdjustableLegacyOptions(consistent_starting_mass=True),
+    )
+    flight = mission(destination='LAX')
+    flight.load_factor = 0.0
+    traj = builder.fly(performance, flight)
+    return traj.starting_mass - 1.05 * traj.total_fuel_mass - performance.empty_mass
+
+
+def test_a_flight_too_heavy_for_its_payload_flies_at_the_maximum_mass(
+    performance_model,
+):
+    traj = heavy_flight(performance_model)
+
+    assert traj.starting_mass == pytest.approx(performance_model.maximum_mass)
+    assert 0.0 < traj.payload_mass < performance_model.maximum_payload
+
+
+def test_the_payload_carried_is_what_the_maximum_mass_leaves_after_the_fuel(
+    performance_model,
+):
+    traj = heavy_flight(performance_model)
+
+    expected = (
+        traj.starting_mass
+        - performance_model.empty_mass
+        - 1.05 * traj.total_fuel_mass
+        - diversion_and_hold_mass(performance_model)
+    )
+    assert traj.payload_mass == pytest.approx(expected, abs=1.0)
+    assert traj.total_fuel_mass == pytest.approx(burned(traj), rel=1e-2)
+
+
+def test_a_flight_lands_no_lighter_than_its_empty_mass_and_payload(performance_model):
+    traj = heavy_flight(performance_model)
+
+    assert traj.aircraft_mass[-1] >= performance_model.empty_mass + traj.payload_mass
+
+
+def test_a_flight_that_fits_carries_the_payload_its_load_factor_asks_for(
+    performance_model,
+):
+    traj = heavy_flight(performance_model, load_factor=0.8, destination='ORD')
+
+    assert traj.payload_mass == pytest.approx(0.8 * performance_model.maximum_payload)
+    assert traj.starting_mass < performance_model.maximum_mass
+
+
+def test_a_flight_that_cannot_fly_even_with_no_payload_is_an_error(performance_model):
+    with pytest.raises(ValueError, match='payload'):
+        heavy_flight(performance_model, load_factor=0.0, destination='SIN')

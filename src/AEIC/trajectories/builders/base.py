@@ -92,6 +92,10 @@ class Context:
     """Total fuel mass loaded onto the aircraft. Initialized as a non-reserve,
     non-divert/hold fuel mass for mass residual calculation."""
 
+    payload_mass: float | None = None
+    """Payload carried, for builders that decide it (as opposed to taking it as
+    the load factor times the maximum payload). Recorded on the trajectory."""
+
     def lower_apex(self, overshoot: float) -> bool:
         """Bring a flight with no cruise closer to the destination.
 
@@ -253,6 +257,7 @@ class Builder(ABC):
             # setting up metadata variables before we do.
             traj.starting_mass = self.starting_mass
             traj.total_fuel_mass = self.total_fuel_mass
+            traj.payload_mass = self.payload_mass
             if mission.flight_id is not None:
                 traj.flight_id = mission.flight_id
             return traj

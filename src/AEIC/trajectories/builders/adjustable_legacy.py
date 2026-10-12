@@ -84,7 +84,12 @@ class AdjustableLegacyOptions(LegacyOptions):
     subtracts the shortfall of the trip fuel from the starting mass and leaves
     the reserve at what the first, crude estimate made it. That is only right
     if the starting mass was the sum of its parts, and slow when the estimate is
-    about twice the burn, as it is for long flights."""
+    about twice the burn, as it is for long flights.
+
+    A flight whose starting mass would then exceed the aircraft's maximum mass
+    is weight-limited: it flies at the maximum mass with the payload reduced by
+    the excess, which is recorded as the trajectory's `payload_mass`. If even
+    no payload would fit, it is an error."""
 
 
 GroundSpeed = Callable[[float, float, float], float]
@@ -527,6 +532,8 @@ class AdjustableLegacyContext(Context):
         # The part of the starting mass that does not depend on the trip fuel,
         # set when the starting mass is calculated.
         self.fixed_mass: float | None = None
+        self.payload_capacity: float | None = None
+        self.payload_mass = None
 
         # Save reserve fuel, divert distance and hold time adjustments for use
         # in starting mass calculation.
@@ -689,11 +696,25 @@ class AdjustableLegacyBuilder(Builder):
         if not self.consistent_starting_mass or self.fixed_mass is None:
             super().correct_starting_mass(mass_residual)
             return
+        assert self.payload_capacity is not None
         fuel_burned = self.total_fuel_mass * (1.0 - mass_residual)
         self.total_fuel_mass = fuel_burned
-        self.starting_mass = (
-            self.fixed_mass + fuel_burned + self.reserve_mass(fuel_burned)
-        )
+        required = self.fixed_mass + fuel_burned + self.reserve_mass(fuel_burned)
+        excess = required - self.ac_performance.maximum_mass
+        if excess <= 0.0:
+            self.starting_mass = required
+            self.payload_mass = self.payload_capacity
+            return
+        # Weight-limited: fly at the maximum mass and carry less payload.
+        if excess > self.payload_capacity:
+            raise ValueError(
+                'Cannot fly this route even with no payload: the fuel it needs '
+                f'({fuel_burned:.0f} kg, plus reserve, diversion and hold) takes '
+                f'the aircraft {excess - self.payload_capacity:.0f} kg over its '
+                f'maximum mass of {self.ac_performance.maximum_mass:.0f} kg.'
+            )
+        self.starting_mass = self.ac_performance.maximum_mass
+        self.payload_mass = self.payload_capacity - excess
 
     def calc_starting_mass(self) -> float:
         """Calculates the starting mass using AEIC v2 methods.
@@ -779,6 +800,10 @@ class AdjustableLegacyBuilder(Builder):
         self.fixed_mass = (
             self.ac_performance.empty_mass + payload_mass + divert_mass + hold_mass
         )
+
+        if self.consistent_starting_mass:
+            self.payload_capacity = payload_mass
+            self.payload_mass = payload_mass
 
         # Limit to MTOM if overweight.
         if starting_mass > self.ac_performance.maximum_mass:
