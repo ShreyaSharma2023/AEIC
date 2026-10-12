@@ -68,6 +68,14 @@ class AdjustableLegacyOptions(LegacyOptions):
     cruise altitude and the arrival airport. An explicit `descent_distance`
     adjustment takes precedence."""
 
+    wind_aware_apex: bool = False
+    """Size the climb, the descent and the apex of a short route in the wind
+    that the flight will meet, instead of with no wind. Without it, a wind
+    changes how far the climb and descent go, so a route with no room for
+    cruise overshoots (or undershoots) by a large share of its length, and the
+    ground-distance iteration then has to correct it by a large amount. Needs
+    `use_weather`."""
+
 
 GroundSpeed = Callable[[float, float, float], float]
 """Ground speed [m/s] of the aircraft at a distance [m] along the route, at an
@@ -426,6 +434,22 @@ class AdjustableLegacyContext(Context):
             raise ValueError(
                 "Arrival airport + 3000ft should not be higher than end of cruise point"
             )
+        # Initialize weather regridding when requested.
+        self.weather: Weather | None = None
+        if builder.options.use_weather:
+            self.weather = Weather(
+                data_dir=config.weather.weather_data_dir,
+                file_resolution=config.weather.file_resolution,
+                data_resolution=config.weather.data_resolution,
+                file_format=config.weather.file_format,
+            )
+
+        # The wind the climb and descent estimates are made in, if requested.
+        self.route_wind: RouteWind | None = None
+        if builder.wind_aware_apex:
+            assert self.weather is not None
+            self.route_wind = self._route_wind(self.weather, mission, ground_track)
+
         if descent_distance is not None:
             self.descent_dist_approx = self.apply_adjustment(
                 descent_distance, mission, ac_performance
@@ -436,6 +460,7 @@ class AdjustableLegacyContext(Context):
                 self.des_start_altitude,
                 self.des_end_altitude,
                 builder.altitude_step,
+                wind=self.route_wind,
             )
         else:
             self.descent_dist_approx = 18.228347 * (
@@ -465,6 +490,7 @@ class AdjustableLegacyContext(Context):
                 self.clm_start_altitude,
                 self.crz_start_altitude,
                 builder.altitude_step,
+                wind=self.route_wind,
             )
             if climb_distance + self.descent_dist_approx > ground_track.total_distance:
                 self.crz_start_altitude = no_cruise_apex_altitude(
@@ -473,6 +499,7 @@ class AdjustableLegacyContext(Context):
                     self.clm_start_altitude,
                     self.des_end_altitude,
                     builder.altitude_step,
+                    wind=self.route_wind,
                 )
                 self.des_start_altitude = self.crz_start_altitude
                 self.descent_dist_approx = flown_descent_distance(
@@ -480,21 +507,12 @@ class AdjustableLegacyContext(Context):
                     self.crz_start_altitude,
                     self.des_end_altitude,
                     builder.altitude_step,
+                    wind=self.route_wind,
                 )
                 cruise_altitude_limit = 'route'
 
         if cruise_altitude_limit is not None:
             builder.cruise_altitude_limits[cruise_altitude_limit] += 1
-
-        # Initialize weather regridding when requested.
-        self.weather: Weather | None = None
-        if builder.options.use_weather:
-            self.weather = Weather(
-                data_dir=config.weather.weather_data_dir,
-                file_resolution=config.weather.file_resolution,
-                data_resolution=config.weather.data_resolution,
-                file_format=config.weather.file_format,
-            )
 
         # Save reserve fuel, divert distance and hold time adjustments for use
         # in starting mass calculation.
@@ -511,6 +529,26 @@ class AdjustableLegacyContext(Context):
             initial_altitude=self.clm_start_altitude,
             starting_mass=starting_mass,
         )
+
+    @staticmethod
+    def _route_wind(
+        weather: Weather, mission: Mission, ground_track: GroundTrack
+    ) -> RouteWind:
+        """The wind along the route at the departure time, as the flight meets
+        it: the ground speed that `Weather.get_track_vector` gives along the
+        ground track."""
+
+        def ground_speed(
+            distance: float, altitude: float, horizontal_airspeed: float
+        ) -> float:
+            return weather.get_track_vector(
+                time=mission.departure,
+                gt_point=ground_track.step(distance, 0.0),
+                altitude=altitude,
+                horizontal_airspeed=horizontal_airspeed,
+            ).ground_speed
+
+        return RouteWind(ground_speed, ground_track.total_distance)
 
     def lower_apex(self, overshoot: float) -> bool:
         """Size the apex for a route shorter (or longer) by `overshoot` [m].
@@ -536,6 +574,7 @@ class AdjustableLegacyContext(Context):
                 self.clm_start_altitude,
                 self.des_end_altitude,
                 self.builder.altitude_step,
+                wind=self.route_wind,
             ),
             self.apex_ceiling,
         )
@@ -545,6 +584,7 @@ class AdjustableLegacyContext(Context):
             self.crz_start_altitude,
             self.des_end_altitude,
             self.builder.altitude_step,
+            wind=self.route_wind,
         )
         return True
 
@@ -595,6 +635,11 @@ class AdjustableLegacyBuilder(Builder):
         self.descent_distance_from_model = getattr(
             legacy_options, 'descent_distance_from_model', False
         )
+        self.wind_aware_apex = getattr(legacy_options, 'wind_aware_apex', False)
+        if self.wind_aware_apex and not self.options.use_weather:
+            raise ValueError(
+                'wind_aware_apex needs use_weather, as it uses the weather'
+            )
         # How many flights did not cruise at their mission's flight level, by
         # reason: 'ceiling' (level above the model's ceiling), 'route' (too
         # short to reach it) and 'no_flight_level' (the mission has none, so

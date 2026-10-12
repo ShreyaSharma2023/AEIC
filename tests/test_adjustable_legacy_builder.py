@@ -533,6 +533,7 @@ def _apex_context(performance_model, route_distance, apex_ceiling=float('inf')):
         des_start_altitude=None,
         descent_dist_approx=None,
         apex_ceiling=apex_ceiling,
+        route_wind=None,
     )
 
 

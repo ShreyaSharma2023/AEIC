@@ -3,7 +3,10 @@
 import pytest
 
 import AEIC.trajectories.builders as tb
+from AEIC.missions import Mission
+from AEIC.missions.mission import iso_to_timestamp
 from AEIC.performance.types import AircraftState, SimpleFlightRules
+from AEIC.trajectories import GroundTrack
 from AEIC.trajectories.builders.adjustable_legacy import (
     RouteWind,
     flown_climb_distance,
@@ -141,3 +144,53 @@ def test_the_apex_of_a_route_in_a_tailwind_is_lower_and_fits_the_route(
         performance_model, CLIMB_START, apex, STEP, wind=tailwind
     ) + flown_descent_distance(performance_model, apex, LANDING, STEP, wind=tailwind)
     assert fitted == pytest.approx(route, abs=1.0)
+
+
+# The builder in a real wind. BOS-JFK is inside the weather file's domain.
+
+
+def weather_mission(origin='BOS', destination='JFK'):
+    return Mission(
+        origin=origin,
+        destination=destination,
+        departure=iso_to_timestamp('2024-09-01T12:00:00'),
+        arrival=iso_to_timestamp('2024-09-01T13:30:00'),
+        aircraft_type='220',
+        load_factor=1.0,
+    )
+
+
+def landing_miss(performance, mission, **legacy_options):
+    builder = tb.AdjustableLegacyBuilder(
+        options=tb.Options(use_weather=True, iterate_mass=False),
+        legacy_options=tb.AdjustableLegacyOptions(
+            descent_distance_from_model=True, **legacy_options
+        ),
+    )
+    traj = builder.fly(performance, mission)
+    route = GroundTrack.great_circle(
+        mission.origin_position.location,
+        mission.destination_position.location,
+        allow_overstep=True,
+    ).total_distance
+    return float(traj.ground_distance[-1]) - route
+
+
+@pytest.mark.forked
+def test_a_wind_aware_descent_estimate_lands_on_the_destination(performance_model):
+    mission = weather_mission()
+
+    unaware = landing_miss(performance_model, mission)
+    aware = landing_miss(performance_model, mission, wind_aware_apex=True)
+
+    assert abs(unaware) > 100.0
+    assert abs(aware) < 0.1 * abs(unaware)
+    assert abs(aware) < 50.0
+
+
+def test_a_wind_aware_apex_needs_weather(performance_model):
+    with pytest.raises(ValueError, match='weather'):
+        tb.AdjustableLegacyBuilder(
+            options=tb.Options(use_weather=False),
+            legacy_options=tb.AdjustableLegacyOptions(wind_aware_apex=True),
+        )
