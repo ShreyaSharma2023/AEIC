@@ -69,15 +69,79 @@ class AdjustableLegacyOptions(LegacyOptions):
     adjustment takes precedence."""
 
 
+GroundSpeed = Callable[[float, float, float], float]
+"""Ground speed [m/s] of the aircraft at a distance [m] along the route, at an
+altitude [m], flying at a horizontal airspeed [m/s]."""
+
+
+@dataclass(frozen=True)
+class RouteWind:
+    """The wind along a route, as it acts on the climb and descent estimates.
+
+    `ground_speed` gives the ground speed at a distance along the route, which
+    is clamped to [0, `route_distance`] before it is called, since a level
+    change near the end of the route can be estimated past it."""
+
+    ground_speed: GroundSpeed
+    route_distance: float
+
+
+def _level_changes(
+    performance: BasePerformanceModel,
+    start_altitude: float,
+    end_altitude: float,
+    altitude_step: float,
+    climbing: bool,
+    aircraft_mass: float | Literal['min', 'max'],
+) -> list[tuple[float, float, float]]:
+    """(altitude, horizontal airspeed, duration) of each step of a level change,
+    from the performance model: everything that does not depend on the wind."""
+    altitudes = level_change_altitudes(
+        start_altitude, end_altitude, altitude_step, climbing
+    )
+    rules = SimpleFlightRules.CLIMB if climbing else SimpleFlightRules.DESCEND
+    steps = []
+    for altitude, next_altitude in zip(altitudes[:-1], altitudes[1:]):
+        perf = performance.evaluate(
+            AircraftState(altitude=altitude, aircraft_mass=aircraft_mass), rules
+        )
+        horizontal_airspeed = float(
+            np.sqrt(perf.true_airspeed**2 - perf.rate_of_climb**2)
+        )
+        duration = (next_altitude - altitude) / perf.rate_of_climb
+        steps.append((float(altitude), horizontal_airspeed, float(duration)))
+    return steps
+
+
+def _distance_flown(
+    steps: list[tuple[float, float, float]],
+    wind: RouteWind | None,
+    start_position: float,
+) -> float:
+    """Ground distance of the steps of a level change that starts
+    `start_position` along the route."""
+    distance = 0.0
+    for altitude, airspeed, duration in steps:
+        if wind is None:
+            speed = airspeed
+        else:
+            position = min(max(start_position + distance, 0.0), wind.route_distance)
+            speed = wind.ground_speed(position, altitude, airspeed)
+        distance += speed * duration
+    return distance
+
+
 def flown_descent_distance(
     performance: BasePerformanceModel,
     start_altitude: float,
     end_altitude: float,
     altitude_step: float,
     aircraft_mass: float | Literal['min', 'max'] = 'min',
+    wind: RouteWind | None = None,
 ) -> float:
     """Ground distance [m] covered by descending from `start_altitude` to
-    `end_altitude` on the given performance model, with no wind.
+    `end_altitude` on the given performance model, with no wind unless `wind`
+    is given.
 
     Mirrors the descent that `AdjustableLegacyBuilder` flies: constant-altitude
     steps, performance evaluated at the start of each, and a step taking
@@ -85,22 +149,35 @@ def flown_descent_distance(
     descent is evaluated at one mass, by default the lightest the model
     tabulates, which is the landing end of the range. It only matters for models
     whose descent depends on mass, since the legacy BADA-derived tables tabulate
-    a single mass."""
-    altitudes = level_change_altitudes(
-        start_altitude, end_altitude, altitude_step, climbing=False
-    )
+    a single mass.
 
-    distance = 0.0
-    for altitude, next_altitude in zip(altitudes[:-1], altitudes[1:]):
-        perf = performance.evaluate(
-            AircraftState(altitude=altitude, aircraft_mass=aircraft_mass),
-            SimpleFlightRules.DESCEND,
-        )
-        horizontal_airspeed = np.sqrt(perf.true_airspeed**2 - perf.rate_of_climb**2)
-        distance += (
-            horizontal_airspeed * (next_altitude - altitude) / perf.rate_of_climb
-        )
-    return float(distance)
+    In wind the descent is taken to end at the end of the route, so where it
+    starts, and hence the wind it flies through, depends on how far it goes.
+    That distance is the one that is consistent with its own start, found by
+    bisection."""
+    steps = _level_changes(
+        performance, start_altitude, end_altitude, altitude_step, False, aircraft_mass
+    )
+    if wind is None:
+        return _distance_flown(steps, None, 0.0)
+
+    def excess(distance: float) -> float:
+        """How far the descent that starts `distance` before the end of the
+        route goes beyond `distance`; falls as `distance` grows."""
+        return _distance_flown(steps, wind, wind.route_distance - distance) - distance
+
+    if not steps or excess(0.0) <= 0.0:
+        return 0.0
+    lo, hi = 0.0, _distance_flown(steps, None, 0.0) + 1.0
+    while excess(hi) > 0.0:
+        lo, hi = hi, 2.0 * hi
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if excess(mid) > 0.0:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
 
 
 def flown_climb_distance(
@@ -109,28 +186,19 @@ def flown_climb_distance(
     end_altitude: float,
     altitude_step: float,
     aircraft_mass: float | Literal['min', 'max'] = 'max',
+    wind: RouteWind | None = None,
 ) -> float:
     """Ground distance [m] covered by climbing from `start_altitude` to
-    `end_altitude` on the given performance model, with no wind.
+    `end_altitude` on the given performance model, with no wind unless `wind`
+    is given.
 
-    Mirrors `flown_descent_distance`, for the climb. Evaluated at one mass, by
-    default the heaviest the model tabulates, matching the aircraft's actual
-    mass at the start of a climb."""
-    altitudes = level_change_altitudes(
-        start_altitude, end_altitude, altitude_step, climbing=True
+    Mirrors `flown_descent_distance`, for the climb, which starts at the start
+    of the route. Evaluated at one mass, by default the heaviest the model
+    tabulates, matching the aircraft's actual mass at the start of a climb."""
+    steps = _level_changes(
+        performance, start_altitude, end_altitude, altitude_step, True, aircraft_mass
     )
-
-    distance = 0.0
-    for altitude, next_altitude in zip(altitudes[:-1], altitudes[1:]):
-        perf = performance.evaluate(
-            AircraftState(altitude=altitude, aircraft_mass=aircraft_mass),
-            SimpleFlightRules.CLIMB,
-        )
-        horizontal_airspeed = np.sqrt(perf.true_airspeed**2 - perf.rate_of_climb**2)
-        distance += (
-            horizontal_airspeed * (next_altitude - altitude) / perf.rate_of_climb
-        )
-    return float(distance)
+    return _distance_flown(steps, wind, 0.0)
 
 
 APEX_OVERCORRECTION = 3.0
@@ -150,6 +218,7 @@ def no_cruise_apex_altitude(
     climb_start_altitude: float,
     descent_end_altitude: float,
     altitude_step: float,
+    wind: RouteWind | None = None,
 ) -> float:
     """The altitude at which a climb from `climb_start_altitude` and a descent
     to `descent_end_altitude`, flown back to back with no cruise in between,
@@ -166,9 +235,9 @@ def no_cruise_apex_altitude(
 
     def total_distance(altitude: float) -> float:
         return flown_climb_distance(
-            performance, climb_start_altitude, altitude, altitude_step
+            performance, climb_start_altitude, altitude, altitude_step, wind=wind
         ) + flown_descent_distance(
-            performance, altitude, descent_end_altitude, altitude_step
+            performance, altitude, descent_end_altitude, altitude_step, wind=wind
         )
 
     shortest_distance = total_distance(climb_start_altitude)
