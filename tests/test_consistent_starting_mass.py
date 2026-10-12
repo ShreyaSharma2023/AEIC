@@ -154,3 +154,21 @@ def test_a_flight_that_fits_carries_the_payload_its_load_factor_asks_for(
 def test_a_flight_that_cannot_fly_even_with_no_payload_is_an_error(performance_model):
     with pytest.raises(ValueError, match='payload'):
         heavy_flight(performance_model, load_factor=0.0, destination='SIN')
+
+
+def test_the_first_estimate_is_never_accepted_as_it_is(performance_model):
+    """The estimate that starts the iteration is capped at the maximum mass but
+    carries the full payload. Even if its burn happens to be within tolerance
+    of its trip fuel, that is not a consistent flight, so it is corrected
+    anyway (a loose tolerance makes every first flight look converged)."""
+    builder = tb.AdjustableLegacyBuilder(
+        options=tb.Options(iterate_mass=True, mass_iter_reltol=10.0),
+        legacy_options=tb.AdjustableLegacyOptions(consistent_starting_mass=True),
+    )
+    flight = mission(destination='LAX')
+    flight.load_factor = 1.0
+
+    traj = builder.fly(performance_model, flight)
+
+    assert traj.starting_mass == pytest.approx(performance_model.maximum_mass)
+    assert traj.payload_mass < performance_model.maximum_payload

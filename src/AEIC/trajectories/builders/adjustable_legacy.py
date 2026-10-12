@@ -532,6 +532,8 @@ class AdjustableLegacyContext(Context):
         # The part of the starting mass that does not depend on the trip fuel,
         # set when the starting mass is calculated.
         self.fixed_mass: float | None = None
+        self.start_is_fitted = False
+        self.fuel_burned: float | None = None
         self.payload_capacity: float | None = None
         self.payload_mass = None
 
@@ -689,6 +691,23 @@ class AdjustableLegacyBuilder(Builder):
             fuel_mass=fuel_mass,
         )
 
+    def _fly_iteration(self) -> tuple[Trajectory, float]:
+        traj, mass_residual = super()._fly_iteration()
+        self.fuel_burned = float(self.starting_mass - traj.aircraft_mass[-1])
+        if (
+            self.consistent_starting_mass
+            and self.fixed_mass is not None
+            and not self.start_is_fitted
+        ):
+            # The first estimate is capped at the maximum mass and carries the
+            # full payload, so it is not consistent with its own burn even if
+            # the burn happens to be within tolerance: report at least the
+            # tolerance so that it is corrected once.
+            tolerance = self.options.mass_iter_reltol
+            if abs(mass_residual) < tolerance:
+                mass_residual = tolerance if mass_residual >= 0 else -tolerance
+        return traj, mass_residual
+
     def correct_starting_mass(self, mass_residual: float) -> None:
         """Correct the starting mass after a flight, as the base builder does
         unless `consistent_starting_mass` is set and the starting mass was
@@ -697,7 +716,8 @@ class AdjustableLegacyBuilder(Builder):
             super().correct_starting_mass(mass_residual)
             return
         assert self.payload_capacity is not None
-        fuel_burned = self.total_fuel_mass * (1.0 - mass_residual)
+        self.start_is_fitted = True
+        fuel_burned = self.fuel_burned
         self.total_fuel_mass = fuel_burned
         required = self.fixed_mass + fuel_burned + self.reserve_mass(fuel_burned)
         excess = required - self.ac_performance.maximum_mass
