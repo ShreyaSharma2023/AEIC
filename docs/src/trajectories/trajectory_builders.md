@@ -230,9 +230,10 @@ the iteration is slow and can end with a flight that lands lighter than its empt
 mass plus payload. Setting `consistent_starting_mass` instead sets the trip fuel to
 the fuel burned and the start to the fixed part plus that fuel plus the reserve
 recomputed from it. A flight whose start would then exceed the maximum mass flies at
-it with the payload reduced by the excess, recorded as the trajectory's `payload_mass`
-(unset otherwise); if even no payload fits it is an error. Adding the field changes the
-base field set, so trajectory files written before it do not open.
+it with the payload reduced by the excess, recorded as the trajectory's `payload_mass`; if even no payload fits it is an error.
+The payload is stored in its own `payload` field set, present only on trajectories
+whose builder decides it, so the base field set, and the trajectory files written
+before it existed, are unchanged.
 
 The builder aims to cruise at the mission's `flight_level` (which a mission database
 supplies per scheduled flight in `schedules.flight_level`), and at the model's ceiling

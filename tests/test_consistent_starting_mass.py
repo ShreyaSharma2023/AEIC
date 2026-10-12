@@ -172,3 +172,34 @@ def test_the_first_estimate_is_never_accepted_as_it_is(performance_model):
 
     assert traj.starting_mass == pytest.approx(performance_model.maximum_mass)
     assert traj.payload_mass < performance_model.maximum_payload
+
+
+# The payload is recorded in its own field set, so that the base field set, and
+# with it every trajectory file written before the payload was recorded, is
+# unchanged.
+
+
+def test_the_payload_is_not_in_the_base_field_set():
+    from AEIC.trajectories.trajectory import BASE_FIELDS
+
+    assert 'payload_mass' not in BASE_FIELDS.fields
+
+
+def test_a_trajectory_without_a_decided_payload_has_no_payload_field(performance_model):
+    traj = fly(performance_model, iterate_mass=True)
+
+    assert not hasattr(traj, 'payload_mass')
+
+
+def test_the_payload_survives_a_trajectory_store(performance_model, tmp_path):
+    from AEIC.trajectories import TrajectoryStore
+
+    traj = heavy_flight(performance_model)
+    path = tmp_path / 'payload.nc'
+    ts = TrajectoryStore.create(base_file=path)
+    ts.add(traj)
+    ts.close()
+
+    ts = TrajectoryStore.open(base_file=path)
+    assert ts[0].payload_mass == pytest.approx(traj.payload_mass)
+    ts.close()

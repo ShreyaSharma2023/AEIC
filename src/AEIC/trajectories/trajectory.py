@@ -51,12 +51,6 @@ BASE_FIELDS = FieldSet(
         description='Total fuel mass used during trajectory',
         units='kg',
     ),
-    payload_mass=FieldMetadata(
-        dimensions=Dimensions(Dimension.TRAJECTORY),
-        description='Payload carried, when the builder decides it',
-        units='kg',
-        required=False,
-    ),
     # Trajectory point counts for the different flight phases. (The "type:
     # ignore" is needed because PyRight cannot prove to itself that the
     # computed field names here don't include "registered", which is a possible
@@ -81,6 +75,20 @@ BASE_FIELDS = FieldSet(
     ),
 )
 """Base field set included in every trajectory."""
+
+PAYLOAD_FIELDSET_NAME = 'payload'
+
+PAYLOAD_FIELDS = FieldSet(
+    PAYLOAD_FIELDSET_NAME,
+    payload_mass=FieldMetadata(
+        dimensions=Dimensions(Dimension.TRAJECTORY),
+        description='Payload carried, as decided by the trajectory builder',
+        units='kg',
+    ),
+)
+"""Field set of trajectories whose builder decides the payload they carry. It is
+separate from the base field set so that adding it did not change the base
+field set, which trajectory files record: files written before it still open."""
 
 
 @dataclass

@@ -9,7 +9,7 @@ from AEIC.storage import Container, FlightPhase
 from AEIC.units import METERS_TO_FL
 
 from ..ground_track import GroundTrack
-from ..trajectory import Trajectory
+from ..trajectory import PAYLOAD_FIELDS, Trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +257,9 @@ class Builder(ABC):
             # setting up metadata variables before we do.
             traj.starting_mass = self.starting_mass
             traj.total_fuel_mass = self.total_fuel_mass
-            traj.payload_mass = self.payload_mass
+            if self.payload_mass is not None:
+                traj.add_fields(PAYLOAD_FIELDS)
+                traj.payload_mass = self.payload_mass
             if mission.flight_id is not None:
                 traj.flight_id = mission.flight_id
             return traj
