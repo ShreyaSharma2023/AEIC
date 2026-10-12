@@ -559,18 +559,21 @@ class AdjustableLegacyContext(Context):
         times `overshoot` shorter makes the next flight land short, and the
         cruise that then fits brings it onto the destination. Does nothing, returning
         False, if the cruise altitude or descent distance was set explicitly,
-        as the apex is then not this context's to change.
+        as the apex is then not this context's to change, or if the new apex is
+        at the altitude it already has (as when it is at its ceiling), so that
+        the flight would be the same again: the caller then feeds the measured
+        descent back instead.
 
         Raises:
             ValueError: If the route is too short for any climb and descent, as
                 for `no_cruise_apex_altitude`."""
         if not self.apex_is_adjustable:
             return False
-        self.apex_route_distance -= overshoot * APEX_OVERCORRECTION
-        self.crz_start_altitude = min(
+        apex_route_distance = self.apex_route_distance - overshoot * APEX_OVERCORRECTION
+        apex_altitude = min(
             no_cruise_apex_altitude(
                 self.ac_performance,
-                self.apex_route_distance,
+                apex_route_distance,
                 self.clm_start_altitude,
                 self.des_end_altitude,
                 self.builder.altitude_step,
@@ -578,6 +581,10 @@ class AdjustableLegacyContext(Context):
             ),
             self.apex_ceiling,
         )
+        if apex_altitude == self.crz_start_altitude:
+            return False
+        self.apex_route_distance = apex_route_distance
+        self.crz_start_altitude = apex_altitude
         self.des_start_altitude = self.crz_start_altitude
         self.descent_dist_approx = flown_descent_distance(
             self.ac_performance,

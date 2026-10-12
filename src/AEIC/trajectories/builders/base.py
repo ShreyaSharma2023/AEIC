@@ -97,7 +97,7 @@ class Context:
 
         Called by ground-distance iteration when the flown trajectory had no
         cruise segment and ended `overshoot` [m] past the destination (negative
-        if short). Returns whether the context could change the flight; this
+        if short). Returns whether the context changed the flight; this
         default cannot, and the iteration then does what it does for any other
         flight."""
         return False

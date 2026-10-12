@@ -579,3 +579,31 @@ def test_the_apex_is_never_raised_above_the_cruise_altitude_it_replaced(
     assert free.crz_start_altitude > 5000.0
     assert capped.crz_start_altitude == 5000.0
     assert capped.des_start_altitude == 5000.0
+
+
+def test_an_apex_already_at_its_ceiling_is_not_moved_and_the_flown_descent_is_used(
+    performance_model,
+):
+    """With the apex at the ceiling nothing can be changed, so `lower_apex` must
+    say so (the iteration then feeds the measured descent back, rather than the
+    same flight being flown again) and leave the state alone. Resetting the
+    descent estimate to the model's would undo that feedback."""
+    ctx = _apex_context(performance_model, 200_000.0, apex_ceiling=5000.0)
+    ctx.crz_start_altitude = 5000.0
+    ctx.des_start_altitude = 5000.0
+    ctx.descent_dist_approx = 12_345.0
+
+    moved = AdjustableLegacyContext.lower_apex(ctx, -1_500.0)
+
+    assert not moved
+    assert ctx.crz_start_altitude == 5000.0
+    assert ctx.descent_dist_approx == 12_345.0
+    assert ctx.apex_route_distance == 200_000.0
+
+
+def test_an_apex_that_moves_says_so(performance_model):
+    ctx = _apex_context(performance_model, 200_000.0)
+    ctx.crz_start_altitude = 5000.0
+
+    assert AdjustableLegacyContext.lower_apex(ctx, 4_000.0)
+    assert ctx.crz_start_altitude != 5000.0
