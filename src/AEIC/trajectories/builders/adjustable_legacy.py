@@ -76,6 +76,16 @@ class AdjustableLegacyOptions(LegacyOptions):
     ground-distance iteration then has to correct it by a large amount. Needs
     `use_weather`."""
 
+    consistent_starting_mass: bool = False
+    """Iterate the starting mass so that it stays equal to what it is made of:
+    the fixed part (empty mass, payload, diversion and hold fuel) plus the trip
+    fuel plus the reserve, with the trip fuel set to the fuel the last flight
+    burned and the reserve recomputed from it. The default correction instead
+    subtracts the shortfall of the trip fuel from the starting mass and leaves
+    the reserve at what the first, crude estimate made it. That is only right
+    if the starting mass was the sum of its parts, and slow when the estimate is
+    about twice the burn, as it is for long flights."""
+
 
 GroundSpeed = Callable[[float, float, float], float]
 """Ground speed [m/s] of the aircraft at a distance [m] along the route, at an
@@ -514,6 +524,10 @@ class AdjustableLegacyContext(Context):
         if cruise_altitude_limit is not None:
             builder.cruise_altitude_limits[cruise_altitude_limit] += 1
 
+        # The part of the starting mass that does not depend on the trip fuel,
+        # set when the starting mass is calculated.
+        self.fixed_mass: float | None = None
+
         # Save reserve fuel, divert distance and hold time adjustments for use
         # in starting mass calculation.
         self.reserve_fuel = reserve_fuel
@@ -642,6 +656,9 @@ class AdjustableLegacyBuilder(Builder):
         self.descent_distance_from_model = getattr(
             legacy_options, 'descent_distance_from_model', False
         )
+        self.consistent_starting_mass = getattr(
+            legacy_options, 'consistent_starting_mass', False
+        )
         self.wind_aware_apex = getattr(legacy_options, 'wind_aware_apex', False)
         if self.wind_aware_apex and not self.options.use_weather:
             raise ValueError(
@@ -652,6 +669,31 @@ class AdjustableLegacyBuilder(Builder):
         # short to reach it) and 'no_flight_level' (the mission has none, so
         # the ceiling less 7000 ft was used).
         self.cruise_altitude_limits: Counter[str] = Counter()
+
+    def reserve_mass(self, fuel_mass: float) -> float:
+        """Reserve fuel [kg] carried for a flight with `fuel_mass` of trip
+        fuel: 5% of it unless the context adjusts it."""
+        if self.reserve_fuel is None:
+            return fuel_mass * 0.05
+        return self.apply_adjustment(
+            self.reserve_fuel,
+            self.mission,
+            self.ac_performance,
+            fuel_mass=fuel_mass,
+        )
+
+    def correct_starting_mass(self, mass_residual: float) -> None:
+        """Correct the starting mass after a flight, as the base builder does
+        unless `consistent_starting_mass` is set and the starting mass was
+        calculated from its parts."""
+        if not self.consistent_starting_mass or self.fixed_mass is None:
+            super().correct_starting_mass(mass_residual)
+            return
+        fuel_burned = self.total_fuel_mass * (1.0 - mass_residual)
+        self.total_fuel_mass = fuel_burned
+        self.starting_mass = (
+            self.fixed_mass + fuel_burned + self.reserve_mass(fuel_burned)
+        )
 
     def calc_starting_mass(self) -> float:
         """Calculates the starting mass using AEIC v2 methods.
@@ -693,16 +735,7 @@ class AdjustableLegacyBuilder(Builder):
         approx_time = self.ground_track.total_distance / perf.true_airspeed
         fuel_mass = approx_time * perf.fuel_flow
 
-        # Reserve fuel (assumed 5%).
-        if self.reserve_fuel is None:
-            reserve_mass = fuel_mass * 0.05
-        else:
-            reserve_mass = self.apply_adjustment(
-                self.reserve_fuel,
-                self.mission,
-                self.ac_performance,
-                fuel_mass=fuel_mass,
-            )
+        reserve_mass = self.reserve_mass(fuel_mass)
 
         # Diversion and hold fuel per AEIC v2.
         # TODO: ADJUSTMENT POINT
@@ -740,6 +773,11 @@ class AdjustableLegacyBuilder(Builder):
             + reserve_mass
             + divert_mass
             + hold_mass
+        )
+
+        # The rest of the starting mass, which the trip fuel does not change.
+        self.fixed_mass = (
+            self.ac_performance.empty_mass + payload_mass + divert_mass + hold_mass
         )
 
         # Limit to MTOM if overweight.

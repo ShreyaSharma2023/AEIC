@@ -288,14 +288,19 @@ class Builder(ABC):
                     "Mass iteration failed to converge; final residual "
                     f"{mass_res:.2e} > {self.options.mass_iter_reltol:.2e}"
                 )
-            # Perform a "dumb" correction of the starting mass.
-            self.starting_mass -= mass_res * self.total_fuel_mass
-            self.total_fuel_mass -= mass_res * self.total_fuel_mass
-
+            self.correct_starting_mass(mass_res)
             traj, mass_res = self._fly_iteration()
             iter += 1
 
         return traj
+
+    def correct_starting_mass(self, mass_residual: float) -> None:
+        """Correct the starting mass and the trip fuel after a flight whose
+        fuel burned fell short of the trip fuel by the fraction
+        `mass_residual` (negative if it was more). This is a "dumb"
+        correction: the shortfall comes off both."""
+        self.starting_mass -= mass_residual * self.total_fuel_mass
+        self.total_fuel_mass -= mass_residual * self.total_fuel_mass
 
     def _iterate_ground_distance(self) -> Trajectory:
         """Iterate on `descent_dist_approx` to minimize the ground distance
