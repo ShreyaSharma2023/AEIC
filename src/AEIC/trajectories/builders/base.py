@@ -96,6 +96,14 @@ class Context:
     """Payload carried, for builders that decide it (as opposed to taking it as
     the load factor times the maximum payload). Recorded on the trajectory."""
 
+    reserve_shortfall: float | None = None
+    """Reserve, diversion and hold fuel not carried so the flight fits the
+    maximum mass, for builders that decide the payload."""
+
+    overweight_mass: float | None = None
+    """Mass beyond the maximum mass that the flight was flown with, for builders
+    that decide the payload."""
+
     def lower_apex(self, overshoot: float) -> bool:
         """Bring a flight with no cruise closer to the destination.
 
@@ -260,6 +268,8 @@ class Builder(ABC):
             if self.payload_mass is not None:
                 traj.add_fields(PAYLOAD_FIELDS)
                 traj.payload_mass = self.payload_mass
+                traj.reserve_shortfall = self.reserve_shortfall
+                traj.overweight_mass = self.overweight_mass
             if mission.flight_id is not None:
                 traj.flight_id = mission.flight_id
             return traj

@@ -51,6 +51,7 @@ gridding.
 | `--wind-aware-apex` | Flag | No | Off | Size the climb, the descent and the apex of a short route in the wind the flight will meet instead of with no wind. Needs `--builder adjustable` and weather. |
 | `--consistent-starting-mass` | Flag | No | Off | Iterate the starting mass as fixed mass + fuel burned + reserve; a flight that would exceed the maximum mass flies at it with less payload, recorded as `payload_mass`. Needs `--builder adjustable` and `--iterate-mass`. |
 | `--max-mass-iterations` | Integer | No | `5` | Maximum number of mass iterations. |
+| `--when-overweight` | `error`, `trim` or `cap` | No | `error` | What `--consistent-starting-mass` does with a flight too heavy to fly even with no payload: refuse it, fly it at the maximum mass with less reserve, diversion and hold fuel (`trim`), or also fly one still too heavy at the maximum mass (`cap`). Recorded as `reserve_shortfall` and `overweight_mass`. |
 
 ```{note}
 Exactly one of `--performance-selector-dir` or `--performance-model-file` must

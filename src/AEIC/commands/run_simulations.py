@@ -33,6 +33,7 @@ def make_trajectory_builder(
     wind_aware_apex: bool = False,
     consistent_starting_mass: bool = False,
     max_mass_iterations: int | None = None,
+    when_overweight: str = 'error',
 ) -> tb.Builder:
     """Make the trajectory builder for a run.
 
@@ -58,6 +59,7 @@ def make_trajectory_builder(
                 ('descent_distance_from_model', descent_distance_from_model),
                 ('wind_aware_apex', wind_aware_apex),
                 ('consistent_starting_mass', consistent_starting_mass),
+                ('when_overweight', when_overweight != 'error'),
             ):
                 if requested:
                     raise ValueError(
@@ -72,6 +74,7 @@ def make_trajectory_builder(
                     descent_distance_from_model=descent_distance_from_model,
                     wind_aware_apex=wind_aware_apex,
                     consistent_starting_mass=consistent_starting_mass,
+                    when_overweight=when_overweight,  # type: ignore[arg-type]
                 ),
             )
         case _:
@@ -334,6 +337,17 @@ def simulate_slice(
     '--iterate-mass.',
 )
 @click.option(
+    '--when-overweight',
+    type=click.Choice(['error', 'trim', 'cap']),
+    default='error',
+    show_default=True,
+    help='What --consistent-starting-mass does with a flight too heavy to fly '
+    'even with no payload: refuse it (error), fly it at the maximum mass with '
+    'less reserve, diversion and hold fuel (trim), or also fly one still too '
+    'heavy at the maximum mass (cap). The shortfall and overweight are '
+    'recorded in the trajectory.',
+)
+@click.option(
     '--max-mass-iterations',
     type=click.IntRange(min=1),
     default=None,
@@ -393,6 +407,7 @@ def run_simulations(
     wind_aware_apex: bool,
     consistent_starting_mass: bool,
     max_mass_iterations: int | None,
+    when_overweight: str,
     iterate_ground_distance: bool,
     load_factor_file: Path | None,
     departure_date: datetime | None,
@@ -462,6 +477,7 @@ def run_simulations(
                 wind_aware_apex=wind_aware_apex,
                 consistent_starting_mass=consistent_starting_mass,
                 max_mass_iterations=max_mass_iterations,
+                when_overweight=when_overweight,
             )
         except ValueError as exc:
             raise click.UsageError(str(exc)) from exc

@@ -108,6 +108,25 @@ def test_the_mass_iteration_limit_reaches_the_builder_options(builder_name):
     )
 
 
+def test_when_overweight_reaches_the_adjustable_builder():
+    builder = make_trajectory_builder(
+        'adjustable', consistent_starting_mass=True, when_overweight='cap'
+    )
+
+    assert builder.when_overweight == 'cap'
+    assert make_trajectory_builder('adjustable').when_overweight == 'error'
+
+
+def test_when_overweight_needs_the_consistent_starting_mass():
+    with pytest.raises(ValueError, match='consistent_starting_mass'):
+        make_trajectory_builder('adjustable', when_overweight='trim')
+
+
+def test_when_overweight_is_an_error_for_the_legacy_builder():
+    with pytest.raises(ValueError, match='--builder adjustable'):
+        make_trajectory_builder('legacy', when_overweight='trim')
+
+
 def test_an_unknown_builder_is_an_error():
     with pytest.raises(ValueError, match="Unknown trajectory builder: 'dymos'"):
         make_trajectory_builder('dymos')
@@ -126,6 +145,7 @@ def test_the_options_are_on_the_command_line():
         '--wind-aware-apex',
         '--consistent-starting-mass',
         '--max-mass-iterations',
+        '--when-overweight',
         '--load-factor-file',
         '--departure-date',
         '--model-cache-size',

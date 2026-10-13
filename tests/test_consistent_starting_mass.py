@@ -203,3 +203,94 @@ def test_the_payload_survives_a_trajectory_store(performance_model, tmp_path):
     ts = TrajectoryStore.open(base_file=path)
     assert ts[0].payload_mass == pytest.approx(traj.payload_mass)
     ts.close()
+
+
+# A flight too heavy even with no payload. With `when_overweight`, it flies
+# anyway: 'trim' takes the excess off the reserve, diversion and hold fuel;
+# 'cap' also flies a flight that is still too heavy with nothing left to trim,
+# at the maximum mass (the performance tables stop there).
+
+
+def overweight_flight(
+    performance, destination, when_overweight='error', consistent=True
+):
+    builder = tb.AdjustableLegacyBuilder(
+        options=tb.Options(iterate_mass=True, max_mass_iters=30),
+        legacy_options=tb.AdjustableLegacyOptions(
+            consistent_starting_mass=consistent, when_overweight=when_overweight
+        ),
+    )
+    flight = mission(destination=destination)
+    flight.load_factor = 0.5
+    return builder.fly(performance, flight)
+
+
+CAIRO = 'CAI'  # 1.3 t too heavy at zero payload: less than the reserve trimmed
+DOHA = 'DOH'  # 8.3 t too heavy: more than the reserve, diversion and hold
+
+
+def test_by_default_a_flight_too_heavy_at_zero_payload_is_an_error(performance_model):
+    with pytest.raises(ValueError, match='no payload'):
+        overweight_flight(performance_model, CAIRO)
+
+
+def test_trim_flies_it_at_the_maximum_mass_with_less_reserve(performance_model):
+    traj = overweight_flight(performance_model, CAIRO, 'trim')
+
+    assert traj.starting_mass == pytest.approx(performance_model.maximum_mass)
+    assert traj.payload_mass == 0.0
+    assert 0.0 < traj.reserve_shortfall < 3000.0
+    assert traj.overweight_mass == 0.0
+    # What is left of the reserve, diversion and hold is on board at landing.
+    assert traj.aircraft_mass[-1] >= performance_model.empty_mass
+
+
+def test_trim_refuses_a_flight_that_is_too_heavy_with_nothing_left_to_trim(
+    performance_model,
+):
+    with pytest.raises(ValueError, match='reserve'):
+        overweight_flight(performance_model, DOHA, 'trim')
+
+
+def test_cap_flies_it_at_the_maximum_mass_and_records_the_overweight(performance_model):
+    traj = overweight_flight(performance_model, DOHA, 'cap')
+
+    assert traj.starting_mass == pytest.approx(performance_model.maximum_mass)
+    assert traj.payload_mass == 0.0
+    assert traj.reserve_shortfall > 0.0
+    # Everything that could be trimmed was, and the rest is the overweight.
+    assert traj.overweight_mass > 0.0
+    assert traj.overweight_mass < 8341.0
+    assert traj.aircraft_mass[-1] < performance_model.empty_mass + 1.0e3
+
+
+def test_cap_treats_a_trimmable_flight_as_trim_does(performance_model):
+    trimmed = overweight_flight(performance_model, CAIRO, 'trim')
+    capped = overweight_flight(performance_model, CAIRO, 'cap')
+
+    assert capped.overweight_mass == 0.0
+    assert capped.reserve_shortfall == pytest.approx(trimmed.reserve_shortfall)
+    assert capped.total_fuel_mass == pytest.approx(trimmed.total_fuel_mass)
+
+
+def test_a_flight_that_fits_records_nothing_trimmed(performance_model):
+    traj = heavy_flight(performance_model)
+
+    assert traj.reserve_shortfall == 0.0
+    assert traj.overweight_mass == 0.0
+
+
+def test_when_overweight_needs_the_consistent_starting_mass():
+    with pytest.raises(ValueError, match='consistent_starting_mass'):
+        tb.AdjustableLegacyBuilder(
+            legacy_options=tb.AdjustableLegacyOptions(when_overweight='trim')
+        )
+
+
+def test_an_unknown_when_overweight_is_an_error():
+    with pytest.raises(ValueError, match='when_overweight'):
+        tb.AdjustableLegacyBuilder(
+            legacy_options=tb.AdjustableLegacyOptions(
+                consistent_starting_mass=True, when_overweight='shrug'
+            )
+        )

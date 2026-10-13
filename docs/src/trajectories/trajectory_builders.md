@@ -230,7 +230,16 @@ the iteration is slow and can end with a flight that lands lighter than its empt
 mass plus payload. Setting `consistent_starting_mass` instead sets the trip fuel to
 the fuel burned and the start to the fixed part plus that fuel plus the reserve
 recomputed from it. A flight whose start would then exceed the maximum mass flies at
-it with the payload reduced by the excess, recorded as the trajectory's `payload_mass`; if even no payload fits it is an error.
+it with the payload reduced by the excess, recorded as the trajectory's `payload_mass`; if even no payload fits it is an error,
+unless `when_overweight` says otherwise. `'trim'` takes the excess off the reserve,
+diversion and hold fuel: the flight burns what it burns at the maximum mass, lands with
+less than its reserve, and the shortfall is recorded as `reserve_shortfall`. `'cap'` also
+flies a flight that is still too heavy with no reserve at all, at the maximum mass, where
+the performance tables stop (they hold their last value above it), and records the mass
+beyond the maximum as `overweight_mass`. The burn of such a flight is that at the maximum
+mass, which understates what a flight that heavy would really burn, by about 0.4% for each
+1% of mass; in the 2025 schedule that is a few thousand ultra-long flights and about 0.005%
+of the fuel. The trim and the overweight are stored with the payload.
 The payload is stored in its own `payload` field set, present only on trajectories
 whose builder decides it, so the base field set, and the trajectory files written
 before it existed, are unchanged.

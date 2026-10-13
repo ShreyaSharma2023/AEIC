@@ -85,6 +85,18 @@ PAYLOAD_FIELDS = FieldSet(
         description='Payload carried, as decided by the trajectory builder',
         units='kg',
     ),
+    reserve_shortfall=FieldMetadata(
+        dimensions=Dimensions(Dimension.TRAJECTORY),
+        description='Reserve, diversion and hold fuel not carried, to fit the '
+        'maximum mass',
+        units='kg',
+    ),
+    overweight_mass=FieldMetadata(
+        dimensions=Dimensions(Dimension.TRAJECTORY),
+        description='Mass by which the flight exceeded the maximum mass, flown '
+        'at the maximum mass',
+        units='kg',
+    ),
 )
 """Field set of trajectories whose builder decides the payload they carry. It is
 separate from the base field set so that adding it did not change the base
