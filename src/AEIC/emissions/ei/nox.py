@@ -119,9 +119,14 @@ def BFFM2_EINOx(
     if np.isnan(NOxEI).any():
         warnings.warn("NaN encountered in NOxEI calculation.", RuntimeWarning)
 
-    NOEI = NOxEI * noProp  # g NO / kg fuel
+    # NOxEI is g NO₂ per kg fuel (ICAO EDB convention) and the speciation
+    # fractions are mole fractions of NOy, so each part is the NO₂-EQUIVALENT
+    # mass of that species, not its own mass: NO + NO₂ + HONO = NOₓ. A model
+    # that reads them as species masses (e.g. HEMCO kg NO) must convert NO by
+    # M(NO)/M(NO₂) and HONO by M(HONO)/M(NO₂) first.
+    NOEI = NOxEI * noProp  # g NO₂-equivalent (as NO) / kg fuel
     NO2EI = NOxEI * no2Prop  # g NO₂ / kg fuel
-    HONOEI = NOxEI * honoProp  # g HONO / kg fuel
+    HONOEI = NOxEI * honoProp  # g NO₂-equivalent (as HONO) / kg fuel
 
     return BFFM2EINOxResult(
         NOxEI=NOxEI,
@@ -137,7 +142,9 @@ def BFFM2_EINOx(
 @dataclass(frozen=True)
 class NOXSpeciation:
     """Fractional speciation of NOₓ into NO, NO₂, and HONO in different thrust
-    modes."""
+    modes. The fractions are mole fractions (percent of NOy), so applied to a
+    NOₓ emission index in g NO₂ they give NO₂-equivalent masses of each
+    species."""
 
     no: ThrustModeValues
     """Fraction of NO in NOₓ in each thrust mode."""

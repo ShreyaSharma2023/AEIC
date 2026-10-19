@@ -73,7 +73,13 @@ steps:
    - For other species (NOₓ and non-volatile particulate matter), emissions
      are calculated using the user-specified calculation method.
    - NOₓ emissions are divided into NO₂, NO and HONO emissions using fixed
-     speciation ratios.
+     speciation ratios. The NOₓ emission index is in g NO₂ per kg fuel (ICAO
+     EDB convention) and the ratios are mole fractions, so the NO and HONO
+     values are **NO₂-equivalent masses**, not masses of NO and HONO
+     (NO + NO₂ + HONO = NOₓ). A chemistry model reading them as species
+     masses, such as HEMCO in kg of NO, needs NO × M(NO)/M(NO₂) and
+     HONO × M(HONO)/M(NO₂); without this, NO-and-HONO nitrogen is overstated
+     by about 50%.
 3. Calls the `AEIC.emissions.lto.get_LTO_emissions` function to calculate
    ICAO-style landing and take off emissions using the per-mode inputs
    embedded in the performance file. The climb-out and approach modes cover

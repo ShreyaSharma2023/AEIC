@@ -557,6 +557,28 @@ def test_lto_mode_needs_no_mission(perf_model, fuel, trajectory):
     _assert_lto_mode_kept(output, perf_model, ThrustMode.APPROACH)
 
 
+@pytest.mark.config_updates(emissions__climb_descent_mode=ClimbDescentMode.TRAJECTORY)
+def test_no_and_hono_are_no2_equivalent_masses(perf_model, fuel, trajectory):
+    """Pin the NOx convention that downstream users must convert: NO, NO2 and
+    HONO are NO2-equivalent masses that add up to NOx, on the trajectory and
+    in every LTO mode (including the kept climb-out and approach). If they
+    were true species masses the sum would fall short of NOx (M(NO) < M(NO2))
+    and HEMCO-ready files would need different conversion factors."""
+    above = airports_below(trajectory, TERMINAL_HEIGHT, TERMINAL_HEIGHT)
+    output = compute_emissions(perf_model, fuel, trajectory, above)
+    parts = (Species.NO, Species.NO2, Species.HONO)
+
+    np.testing.assert_allclose(
+        sum(output.trajectory_emissions[sp] for sp in parts),
+        output.trajectory_emissions[Species.NOx],
+    )
+    for mode in ThrustMode:
+        assert sum(output.lto_emissions[sp][mode] for sp in parts) == pytest.approx(
+            output.lto_emissions[Species.NOx][mode]
+        )
+    assert output.lto_emissions[Species.NOx][ThrustMode.CLIMB] > 0
+
+
 def test_lto_nox_split_consistent_with_speciation_factors(emissions):
     """Consistency check: the LTO NOx-split path multiplies by the
     same `NOx_speciation()` factors the SUT uses, so this verifies the
