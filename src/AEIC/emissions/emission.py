@@ -2,17 +2,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 
 from AEIC.config import config
+from AEIC.config.emissions import ClimbDescentMode
 from AEIC.emissions.types import EmissionsSubset
 from AEIC.performance.models import BasePerformanceModel
 from AEIC.performance.types import ThrustModeValues
 from AEIC.storage import Dimension, Dimensions, FieldMetadata, FieldSet
 from AEIC.trajectories import Trajectory
 from AEIC.types import Fuel, Species, SpeciesValues
+from AEIC.units import FEET_TO_METERS
+
+if TYPE_CHECKING:
+    from AEIC.missions import Mission
 
 from .apu import get_APU_emissions
 from .gse import get_GSE_emissions
@@ -131,7 +136,10 @@ class Emissions:
 
 
 def compute_emissions(
-    pm: BasePerformanceModel, fuel: Fuel, traj: Trajectory
+    pm: BasePerformanceModel,
+    fuel: Fuel,
+    traj: Trajectory,
+    mission: Mission | None = None,
 ) -> Emissions:
     """Compute all emissions.
 
@@ -155,10 +163,16 @@ def compute_emissions(
     The contents of the trajectory and LTO components depend on the
     `climb_descent_mode` setting in the configuration. If `climb_descent_mode`
     is set to 'trajectory', emissions are calculated for the entire trajectory,
-    including climb and descent phases. If it is set to 'lto', emissions for
-    climb and descent phases are not calculated from the trajectory; instead,
-    LTO data is used to estimate emissions for these phases based on
-    time-in-mode values.
+    including climb and descent phases, and the LTO climb-out (approach) mode
+    is dropped only if the trajectory starts (ends) at the origin
+    (destination) airport, i.e. covers that flight itself. A trajectory that
+    starts or ends 3,000 ft above the airport, as the legacy builders' do,
+    keeps the mode, since the flight below 3,000 ft is otherwise in neither
+    component. This needs the `mission` for the airport elevations; anything
+    between the two cases is an error. If `climb_descent_mode` is set to
+    'lto', emissions for climb and descent phases are not calculated from the
+    trajectory; instead, LTO data is used to estimate emissions for these
+    phases based on time-in-mode values, and `mission` is not needed.
 
     If lifecycle CO₂ adjustments are enabled, lifecycle CO₂ emissions are also
     calculated and included in the total emissions.
@@ -173,7 +187,15 @@ def compute_emissions(
     total_fuel_burn = trajectory.fuel_burn
 
     # Calculate LTO emissions for ground and approach/climb modes.
-    lto = get_LTO_emissions(pm, fuel)
+    climb_out_in_trajectory, approach_in_trajectory = _terminal_flight_in_trajectory(
+        traj, mission
+    )
+    lto = get_LTO_emissions(
+        pm,
+        fuel,
+        climb_out_in_trajectory=climb_out_in_trajectory,
+        approach_in_trajectory=approach_in_trajectory,
+    )
     total_fuel_burn += lto.fuel_burn
 
     # Calculate APU emissions based on specified APU type.
@@ -224,6 +246,61 @@ def compute_emissions(
         emissions.lifecycle_co2 = lifecycle_adjustment
 
     return emissions
+
+
+LTO_CYCLE_TOP = 3000.0 * FEET_TO_METERS
+"""Top of the ICAO LTO cycle above the airport [m]: the climb-out and approach
+modes cover flight between the ground and this height."""
+
+_TERMINAL_HEIGHT_TOLERANCE = 1.0
+"""How close [m] a trajectory end point must be to the airport, or to
+`LTO_CYCLE_TOP` above it, to count as that case."""
+
+
+def _terminal_flight_in_trajectory(
+    traj: Trajectory, mission: Mission | None
+) -> tuple[bool, bool]:
+    """Whether the trajectory itself covers the flight below 3,000 ft at the
+    departure (climb-out) and at the arrival (approach) end.
+
+    In LTO mode the trajectory's climb and descent are not used, so neither is
+    covered. In TRAJECTORY mode an end point at the airport elevation covers
+    it and one `LTO_CYCLE_TOP` above the airport does not; any other height
+    covers part of the mode, which ICAO time-in-mode cannot represent, and
+    raises.
+    """
+    if config.emissions.climb_descent_mode == ClimbDescentMode.LTO:
+        return False, False
+    if mission is None:
+        raise ValueError(
+            'climb_descent_mode = trajectory needs the mission to tell whether '
+            'the trajectory starts and ends at the airports'
+        )
+    return (
+        _covered(
+            'climb-out',
+            float(traj.altitude[0]),
+            mission.origin_position.altitude,
+        ),
+        _covered(
+            'approach',
+            float(traj.altitude[-1]),
+            mission.destination_position.altitude,
+        ),
+    )
+
+
+def _covered(mode: str, altitude: float, airport_elevation: float) -> bool:
+    height = altitude - airport_elevation
+    if abs(height) <= _TERMINAL_HEIGHT_TOLERANCE:
+        return True
+    if abs(height - LTO_CYCLE_TOP) <= _TERMINAL_HEIGHT_TOLERANCE:
+        return False
+    raise ValueError(
+        f'trajectory {mode} end is {height:.1f} m above the airport: neither at '
+        f'the airport nor at the top of the LTO cycle ({LTO_CYCLE_TOP:.1f} m), '
+        f'so the ICAO {mode} mode would be partly counted twice or partly missed'
+    )
 
 
 def sum_total_emissions(

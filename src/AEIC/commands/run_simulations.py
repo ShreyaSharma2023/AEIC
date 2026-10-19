@@ -208,7 +208,7 @@ def simulate_slice(
                             continue
                     assert isinstance(pm, BasePerformanceModel)
                     traj = builder.fly(pm, mission)
-                    traj.add_fields(compute_emissions(pm, fuel, traj))
+                    traj.add_fields(compute_emissions(pm, fuel, traj, mission))
                 except Exception:
                     # General exception from trajectory builder.
                     logger.exception(

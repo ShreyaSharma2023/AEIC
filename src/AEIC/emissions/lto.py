@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 from AEIC.config import config
 from AEIC.config.emissions import (
-    ClimbDescentMode,
     EINOxMethod,
     EInvPMMethod,
 )
@@ -24,10 +23,20 @@ if TYPE_CHECKING:
 
 
 def get_LTO_emissions(
-    performance_model: BasePerformanceModel, fuel: Fuel
+    performance_model: BasePerformanceModel,
+    fuel: Fuel,
+    *,
+    climb_out_in_trajectory: bool,
+    approach_in_trajectory: bool,
 ) -> EmissionsSubset[ThrustModeValues]:
     """
     Compute Landing-and-Takeoff cycle emission indices and quantities.
+
+    The ICAO climb-out and approach modes cover flight below 3,000 ft. When
+    the trajectory itself already covers that flight, the corresponding mode
+    is set to zero here so it is not counted twice: `climb_out_in_trajectory`
+    for the climb-out mode, `approach_in_trajectory` for the approach mode.
+    Idle (taxi) and take-off are always kept.
     """
     lto_indices = SpeciesValues[ThrustModeValues]()
     lto_emissions = SpeciesValues[ThrustModeValues]()
@@ -49,15 +58,23 @@ def get_LTO_emissions(
         lto_indices.update(_lto_nvpm(lto_data))
 
     lto_fuel_burn = _LTO_TIMS * lto_data.fuel_flow
-    if config.emissions.climb_descent_mode != ClimbDescentMode.LTO:
+    in_trajectory = [
+        mode
+        for mode, covered in (
+            (ThrustMode.CLIMB, climb_out_in_trajectory),
+            (ThrustMode.APPROACH, approach_in_trajectory),
+        )
+        if covered
+    ]
+    if in_trajectory:
         # These are handled in the trajectory emissions calculation.
-        for mode in [ThrustMode.APPROACH, ThrustMode.CLIMB]:
+        for mode in in_trajectory:
             lto_fuel_burn[mode] = 0.0
         for species in lto_indices:
             # Need to be careful about copying these and making them mutable,
             # since a lot of them may come from immutable configuration data.
             lto_indices[species] = lto_indices[species].copy(mutable=True)
-            for mode in [ThrustMode.APPROACH, ThrustMode.CLIMB]:
+            for mode in in_trajectory:
                 lto_indices[species][mode] = 0.0
 
     for species in lto_indices.keys():

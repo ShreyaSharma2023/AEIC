@@ -1,5 +1,3 @@
-import functools
-
 import numpy as np
 import pytest
 
@@ -19,7 +17,7 @@ def test_emissions_storage(tmp_path, sample_missions, performance_model, fuel):
     original_totals = []
     for mis in sample_missions:
         traj = builder.fly(performance_model, mis)
-        emissions = compute_emissions(performance_model, fuel, traj)
+        emissions = compute_emissions(performance_model, fuel, traj, mis)
         original_totals.append(dict(emissions.total_emissions))
         traj.add_fields(emissions)
         ts.add(traj)
@@ -44,9 +42,12 @@ def test_separate_emissions(tmp_path, sample_missions, performance_model, fuel):
     expected_totals = []
     expected_indices = []
     with TrajectoryStore.create(base_file=path) as ts:
-        for mis in sample_missions:
+        for i, mis in enumerate(sample_missions):
             traj = builder.fly(performance_model, mis)
-            emissions = compute_emissions(performance_model, fuel, traj)
+            # The stored trajectory has no airports, which TRAJECTORY-mode
+            # emissions need: its name leads back to its mission.
+            traj.name = str(i)
+            emissions = compute_emissions(performance_model, fuel, traj, mis)
             expected_totals.append(dict(emissions.total_emissions))
             expected_indices.append(dict(emissions.trajectory_indices))
             ts.add(traj)
@@ -55,8 +56,8 @@ def test_separate_emissions(tmp_path, sample_missions, performance_model, fuel):
         ts_create_assoc.create_associated(
             associated_file=emissions_path,
             fieldsets=['emissions'],
-            mapping_function=functools.partial(
-                compute_emissions, performance_model, fuel
+            mapping_function=lambda traj: compute_emissions(
+                performance_model, fuel, traj, sample_missions[int(traj.name)]
             ),
         )
 

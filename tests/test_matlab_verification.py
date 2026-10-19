@@ -127,7 +127,7 @@ def test_matlab_verification(test_data_dir) -> None:
 
         # Simulate mission and compute emissions with new AEIC.
         new_traj = builder.fly(pm, mission)
-        new_traj.add_fields(compute_emissions(pm, fuel, new_traj))
+        new_traj.add_fields(compute_emissions(pm, fuel, new_traj, mission))
 
         if len(legacy_traj) != len(new_traj):
             point_count = (
@@ -271,7 +271,7 @@ def test_lto_cruise_segments_match_matlab(test_data_dir) -> None:
     for mission in missions:
         matlab_traj = LegacyTrajectory(legacy_dir / f'{mission.label}.csv').trajectory()
         python_traj = builder.fly(pm, mission)
-        emissions = compute_emissions(pm, fuel, python_traj)
+        emissions = compute_emissions(pm, fuel, python_traj, mission)
 
         matlab_cruise_legs = np.diff(matlab_traj.altitude) == 0.0
         python_emitted_legs = emissions.trajectory_emissions[Species.CO2][:-1] > 0.0

@@ -193,7 +193,7 @@ def simulate_slice(
                 # Fly the mission, catching exceptions.
                 try:
                     traj = builder.fly(perf, mission)
-                    traj.add_fields(compute_emissions(perf, fuel, traj))
+                    traj.add_fields(compute_emissions(perf, fuel, traj, mission))
                 except ValueError as exc:
                     # General exception from trajectory builder.
                     report(exc, mission)

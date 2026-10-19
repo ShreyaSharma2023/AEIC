@@ -36,8 +36,12 @@ class ClimbDescentMode(CIStrEnum):
     """Climb/descent emissions calculation mode."""
 
     TRAJECTORY = 'trajectory'
-    """Calculate emissions for the entire trajectory (takeoff, climb, cruise,
-    descent)."""
+    """Calculate emissions for the entire trajectory (climb, cruise, descent).
+    The LTO climb-out and approach modes are kept unless the trajectory
+    starts (ends) at the airport itself: the legacy builders start climb and
+    end descent 3,000 ft above the airports, so for them the ICAO modes cover
+    the flight below. Needs the mission (airport elevations) in
+    `compute_emissions`."""
 
     LTO = 'lto'
     """Calculate emissions only for cruise and use LTO data for takeoff,

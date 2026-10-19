@@ -76,10 +76,21 @@ steps:
      speciation ratios.
 3. Calls the `AEIC.emissions.lto.get_LTO_emissions` function to calculate
    ICAO-style landing and take off emissions using the per-mode inputs
-   embedded in the performance file. (If the emissions configuration flag
-   `climb_descent_mode` is set to `trajectory`, LTO emissions are not returned
-   for the climb and approach phases of the flight, since these are included
-   in the trajectory emissions.)
+   embedded in the performance file. The climb-out and approach modes cover
+   flight between the ground and 3,000 ft. If the emissions configuration flag
+   `climb_descent_mode` is set to `trajectory`, `compute_emissions` needs the
+   mission, and compares the trajectory's first (last) altitude with the
+   origin (destination) airport elevation:
+   - at the airport: the trajectory covers that flight itself, so the
+     climb-out (approach) mode is not returned;
+   - 3,000 ft above the airport, where the legacy builders start climb and end
+     descent: the mode is kept, since that flight is otherwise in neither
+     component;
+   - anywhere else: an error, since ICAO time-in-mode cannot be split.
+
+   (Earlier versions dropped both modes in `trajectory` mode regardless, which
+   left the flight below 3,000 ft out of the inventory for the legacy
+   builders: about 3% of fuel and NOₓ.)
 4. If APU emissions are requested and the performance model provides an APU
    definition, calls the `AEIC.emissions.apu.get_APU_emissions` function to
    calculate APU emissions.

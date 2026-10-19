@@ -355,7 +355,7 @@ def main(report_file) -> None:
 
             # Simulate mission and compute emissions with new AEIC.
             new_traj = builder.fly(pm, mission)
-            new_traj.add_fields(compute_emissions(pm, fuel, new_traj))
+            new_traj.add_fields(compute_emissions(pm, fuel, new_traj, mission))
 
             # For comparison, we do *not* interpolate the new AEIC trajectory
             # onto the same time points as the legacy trajectory. The match

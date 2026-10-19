@@ -8,6 +8,7 @@ from AEIC.storage import Dimension, FlightPhase
 from AEIC.trajectories.trajectory import BASE_FIELDS, Trajectory
 from AEIC.types import Species
 from AEIC.units import METERS_TO_FEET
+from tests.test_emissions import airports_below
 from tests.utils import make_test_trajectory
 
 
@@ -15,7 +16,7 @@ def test_trajectory_comparison(sample_missions, performance_model, fuel):
     # Create a simulated trajectory with emissions data.
     builder = tb.LegacyBuilder(options=tb.Options(iterate_mass=False))
     traj = builder.fly(performance_model, sample_missions[0])
-    emissions = compute_emissions(performance_model, fuel, traj)
+    emissions = compute_emissions(performance_model, fuel, traj, sample_missions[0])
     traj.add_fields(emissions)
 
     # Create a clone of the trajectory and check equality and near-equality
@@ -198,7 +199,9 @@ def test_dateline_splitting_no_split(performance_model, fuel):
     # not split into sub-trajectories.
     traj = make_test_trajectory(5, 1)
     traj.longitude = np.array([-140.0, -139.5, -139.0, -138.5, -138.0])
-    emissions = compute_emissions(performance_model, fuel, traj)
+    emissions = compute_emissions(
+        performance_model, fuel, traj, airports_below(traj, 0.0, 0.0)
+    )
     traj.add_fields(emissions)
     sub_trajs = traj.dateline_split()
     assert len(sub_trajs) == 1
@@ -223,7 +226,9 @@ def test_dateline_splitting_two_point_1(performance_model, fuel):
     traj.longitude = np.array([179.0, -179.0])
     traj.latitude = np.array([40.0, 41.0])
     traj.altitude = np.array([8000.0, 8100.0])
-    traj.add_fields(compute_emissions(performance_model, fuel, traj))
+    traj.add_fields(
+        compute_emissions(performance_model, fuel, traj, airports_below(traj, 0.0, 0.0))
+    )
     traj.trajectory_emissions[Species.CO2] = np.array([100.0, 0.0])
     sub_trajs = traj.dateline_split()
 
@@ -244,7 +249,9 @@ def test_dateline_splitting_two_point_2(performance_model, fuel):
     traj.longitude = np.array([179.5, -178.5])
     traj.latitude = np.array([40.0, 41.0])
     traj.altitude = np.array([8000.0, 8100.0])
-    traj.add_fields(compute_emissions(performance_model, fuel, traj))
+    traj.add_fields(
+        compute_emissions(performance_model, fuel, traj, airports_below(traj, 0.0, 0.0))
+    )
     traj.trajectory_emissions[Species.CO2] = np.array([100.0, 0.0])
     sub_trajs = traj.dateline_split()
 
@@ -264,7 +271,9 @@ def test_dateline_splitting_degenerate_1(performance_model, fuel):
     traj.longitude = np.array([179.0, 180.0, -179.0])
     traj.latitude = np.array([40.0, 40.5, 41.0])
     traj.altitude = np.array([8000.0, 8050.0, 8100.0])
-    traj.add_fields(compute_emissions(performance_model, fuel, traj))
+    traj.add_fields(
+        compute_emissions(performance_model, fuel, traj, airports_below(traj, 0.0, 0.0))
+    )
     traj.trajectory_emissions[Species.CO2] = np.array([50.0, 50.0, 0.0])
     sub_trajs = traj.dateline_split()
 
@@ -282,7 +291,9 @@ def test_dateline_splitting_2(performance_model, fuel):
     # two sub-trajectories with points in the correct hemispheres.
     traj = make_test_trajectory(5, 1)
     traj.longitude = np.array([179.0, 179.75, -179.5, -178.75, -178.0])
-    emissions = compute_emissions(performance_model, fuel, traj)
+    emissions = compute_emissions(
+        performance_model, fuel, traj, airports_below(traj, 0.0, 0.0)
+    )
     traj.add_fields(emissions)
     sub_trajs = traj.dateline_split()
     assert len(sub_trajs) == 2
@@ -319,7 +330,9 @@ def test_dateline_splitting_4(performance_model, fuel):
             -177.5,
         ]
     )
-    emissions = compute_emissions(performance_model, fuel, traj)
+    emissions = compute_emissions(
+        performance_model, fuel, traj, airports_below(traj, 0.0, 0.0)
+    )
     traj.add_fields(emissions)
     sub_trajs = traj.dateline_split()
     assert len(sub_trajs) == 4

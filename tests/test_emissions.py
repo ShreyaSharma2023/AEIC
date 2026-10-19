@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -113,6 +114,28 @@ class DummyTrajectory:
         return self._npoints
 
 
+TERMINAL_HEIGHT = 914.4
+"""3,000 ft in metres: the height the legacy builders start climb and end
+descent above the airport, and the top of the ICAO LTO cycle."""
+
+
+def airports_below(traj, start_agl: float, end_agl: float):
+    """Stand-in mission whose origin and destination airports sit `start_agl`
+    and `end_agl` metres below the trajectory's first and last points. Only the
+    airport elevations are read by `compute_emissions`."""
+    return SimpleNamespace(
+        origin_position=SimpleNamespace(altitude=traj.altitude[0] - start_agl),
+        destination_position=SimpleNamespace(altitude=traj.altitude[-1] - end_agl),
+    )
+
+
+@pytest.fixture
+def ground_mission(trajectory):
+    """Airports at the trajectory's end points: the trajectory itself covers
+    climb-out and approach."""
+    return airports_below(trajectory, 0.0, 0.0)
+
+
 @pytest.fixture
 def trajectory():
     return DummyTrajectory()
@@ -125,7 +148,9 @@ def perf_model():
 
 @pytest.fixture
 def emissions(perf_model, fuel, trajectory):
-    return compute_emissions(perf_model, fuel, trajectory)
+    return compute_emissions(
+        perf_model, fuel, trajectory, airports_below(trajectory, 0.0, 0.0)
+    )
 
 
 def test_emissions_species(emissions):
@@ -294,7 +319,9 @@ def test_compute_emissions_pipeline_wiring(perf_model, trajectory, emissions):
     emissions__nvpm_method='meem', emissions__lifecycle_enabled=False
 )
 def test_sum_total_emissions_matches_components(perf_model, fuel, trajectory):
-    emissions = compute_emissions(perf_model, fuel, trajectory)
+    emissions = compute_emissions(
+        perf_model, fuel, trajectory, airports_below(trajectory, 0.0, 0.0)
+    )
 
     # Precondition: with the default config + this trajectory, CO2 must
     # appear in every component bucket with a positive value. The
@@ -327,7 +354,9 @@ def test_apu_disabled_short_circuits(perf_model, fuel, trajectory):
     empty `apu_emissions`. The default config has APU enabled, so this
     branch is otherwise unexercised.
     """
-    output = compute_emissions(perf_model, fuel, trajectory)
+    output = compute_emissions(
+        perf_model, fuel, trajectory, airports_below(trajectory, 0.0, 0.0)
+    )
     assert dict(output.apu_emissions) == {}
 
 
@@ -342,7 +371,9 @@ def test_apu_disabled_short_circuits(perf_model, fuel, trajectory):
     emissions__lifecycle_enabled=False,
 )
 def test_apu_and_gse_exclude_disabled_species(perf_model, fuel, trajectory):
-    emissions = compute_emissions(perf_model, fuel, trajectory)
+    emissions = compute_emissions(
+        perf_model, fuel, trajectory, airports_below(trajectory, 0.0, 0.0)
+    )
 
     assert set(emissions.apu_indices) == set()
     assert set(emissions.apu_emissions) == set()
@@ -353,7 +384,9 @@ def test_apu_and_gse_exclude_disabled_species(perf_model, fuel, trajectory):
 def test_lifecycle_co2_replaces_operational_co2_for_all_fuel(
     perf_model, fuel, trajectory
 ):
-    emissions = compute_emissions(perf_model, fuel, trajectory)
+    emissions = compute_emissions(
+        perf_model, fuel, trajectory, airports_below(trajectory, 0.0, 0.0)
+    )
     operational_co2 = (
         np.sum(emissions.trajectory_emissions[Species.CO2])
         + emissions.lto_emissions[Species.CO2].sum()
@@ -389,13 +422,14 @@ def test_scope11_profile_caching(perf_model):
 
 
 @pytest.mark.config_updates(emissions__climb_descent_mode=ClimbDescentMode.TRAJECTORY)
-def test_lto_respects_traj_flag_true(perf_model, fuel, trajectory):
-    """In TRAJECTORY mode the climb and descent emissions move to the
-    trajectory side; the LTO APPROACH/CLIMB columns must be zero AND
-    the trajectory side must carry the mass. Asserting only the LTO
-    zero would let a regression that dropped the mass entirely pass.
+def test_lto_respects_traj_flag_true(perf_model, fuel, trajectory, ground_mission):
+    """In TRAJECTORY mode, for a trajectory that starts and ends at the
+    airports, the climb and descent emissions move to the trajectory side;
+    the LTO APPROACH/CLIMB columns must be zero AND the trajectory side must
+    carry the mass. Asserting only the LTO zero would let a regression that
+    dropped the mass entirely pass.
     """
-    output = compute_emissions(perf_model, fuel, trajectory)
+    output = compute_emissions(perf_model, fuel, trajectory, ground_mission)
     for m in [ThrustMode.APPROACH, ThrustMode.CLIMB]:
         assert all(
             np.isclose(output.lto_emissions[species][m], 0.0)
@@ -428,6 +462,99 @@ def test_lto_respects_traj_flag_false(perf_model, fuel, trajectory):
         assert np.sum(arr[cruise_slice]) > 0
         assert np.allclose(arr[climb_slice], 0)
         assert np.allclose(arr[descent_slice], 0)
+
+
+LTO_TIME_IN_MODE_S = {ThrustMode.CLIMB: 2.2 * 60.0, ThrustMode.APPROACH: 4.0 * 60.0}
+
+
+def _assert_lto_mode_kept(output, perf_model, mode):
+    """The mode carries the full ICAO time-in-mode amount, for every species."""
+    fuel_in_mode = LTO_TIME_IN_MODE_S[mode] * perf_model.lto.fuel_flow[mode]
+    assert fuel_in_mode > 0
+    for species, values in output.lto_emissions.items():
+        assert values[mode] == pytest.approx(
+            output.lto_indices[species][mode] * fuel_in_mode
+        )
+        assert values[mode] > 0, species
+
+
+def _assert_lto_mode_zero(output, mode):
+    for species, values in output.lto_emissions.items():
+        assert values[mode] == 0.0, species
+
+
+@pytest.mark.config_updates(emissions__climb_descent_mode=ClimbDescentMode.TRAJECTORY)
+def test_trajectory_mode_keeps_terminal_lto_when_trajectory_starts_above_airport(
+    perf_model, fuel, trajectory, ground_mission
+):
+    """The legacy builders start climb and end descent 3,000 ft above the
+    airports. The flight below that is then in neither the trajectory nor the
+    LTO unless the ICAO climb-out and approach modes are kept."""
+    above = airports_below(trajectory, TERMINAL_HEIGHT, TERMINAL_HEIGHT)
+    output = compute_emissions(perf_model, fuel, trajectory, above)
+    _assert_lto_mode_kept(output, perf_model, ThrustMode.CLIMB)
+    _assert_lto_mode_kept(output, perf_model, ThrustMode.APPROACH)
+
+    # The kept modes add exactly their fuel to the total.
+    covered = compute_emissions(perf_model, fuel, trajectory, ground_mission)
+    added = sum(
+        LTO_TIME_IN_MODE_S[m] * perf_model.lto.fuel_flow[m]
+        for m in (ThrustMode.CLIMB, ThrustMode.APPROACH)
+    )
+    assert output.total_fuel_burn == pytest.approx(covered.total_fuel_burn + added)
+    # The trajectory side is unchanged.
+    for species, arr in covered.trajectory_emissions.items():
+        np.testing.assert_array_equal(output.trajectory_emissions[species], arr)
+
+
+@pytest.mark.config_updates(emissions__climb_descent_mode=ClimbDescentMode.TRAJECTORY)
+def test_trajectory_mode_decides_climb_out_and_approach_separately(
+    perf_model, fuel, trajectory
+):
+    """Climb-out follows where the trajectory starts, approach where it ends."""
+    mission = airports_below(trajectory, 0.0, TERMINAL_HEIGHT)
+    output = compute_emissions(perf_model, fuel, trajectory, mission)
+    _assert_lto_mode_zero(output, ThrustMode.CLIMB)
+    _assert_lto_mode_kept(output, perf_model, ThrustMode.APPROACH)
+
+    mission = airports_below(trajectory, TERMINAL_HEIGHT, 0.0)
+    output = compute_emissions(perf_model, fuel, trajectory, mission)
+    _assert_lto_mode_kept(output, perf_model, ThrustMode.CLIMB)
+    _assert_lto_mode_zero(output, ThrustMode.APPROACH)
+
+
+@pytest.mark.parametrize('height', [5.0, 457.2, 900.0, 930.0])
+@pytest.mark.config_updates(emissions__climb_descent_mode=ClimbDescentMode.TRAJECTORY)
+def test_trajectory_mode_rejects_partial_terminal_coverage(
+    perf_model, fuel, trajectory, height
+):
+    """A trajectory starting neither at the airport nor 3,000 ft above it
+    covers part of the climb-out: ICAO time-in-mode cannot be split, so this
+    is an error rather than a guess."""
+    with pytest.raises(ValueError, match='climb-out'):
+        compute_emissions(
+            perf_model, fuel, trajectory, airports_below(trajectory, height, 0.0)
+        )
+    with pytest.raises(ValueError, match='approach'):
+        compute_emissions(
+            perf_model, fuel, trajectory, airports_below(trajectory, 0.0, height)
+        )
+
+
+@pytest.mark.config_updates(emissions__climb_descent_mode=ClimbDescentMode.TRAJECTORY)
+def test_trajectory_mode_requires_mission(perf_model, fuel, trajectory):
+    """Without the airports there is no way to tell whether the trajectory
+    covers climb-out and approach, so TRAJECTORY mode refuses."""
+    with pytest.raises(ValueError, match='mission'):
+        compute_emissions(perf_model, fuel, trajectory)
+
+
+@pytest.mark.config_updates(emissions__climb_descent_mode=ClimbDescentMode.LTO)
+def test_lto_mode_needs_no_mission(perf_model, fuel, trajectory):
+    """LTO mode always uses the ICAO climb-out and approach modes."""
+    output = compute_emissions(perf_model, fuel, trajectory)
+    _assert_lto_mode_kept(output, perf_model, ThrustMode.CLIMB)
+    _assert_lto_mode_kept(output, perf_model, ThrustMode.APPROACH)
 
 
 def test_lto_nox_split_consistent_with_speciation_factors(emissions):
