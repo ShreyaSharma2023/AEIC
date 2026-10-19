@@ -5,8 +5,9 @@
 2. Per file and species: area * seconds * flux (converted back to grams) equals the sum of the included class grids (trajectory + LTO), relative 1e-5.
 3. no_wide + no_narrow + no_small == 2 * all, per variable and month (cell by cell, relative 1e-5 of the variable's max).
 4. Level 1 holds at least the LTO of the included classes; levels 2-72 equal the trajectory part only."""
+import os
 import sys, numpy as np, netCDF4 as nc
-O = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'
+O = os.environ['RUN_DIR']
 M_NO, M_NO2, M_HONO = 30.0061, 46.0055, 47.0134
 CASES = {'only_wide': ('wide',), 'only_narrow': ('narrow',), 'only_small': ('small',), 'all': ('wide', 'narrow', 'small'), 'no_wide': ('narrow', 'small'), 'no_narrow': ('wide', 'small'), 'no_small': ('wide', 'narrow')}
 SRC = {'FUELBURN': ('co2', 1 / 3155.6), 'CO': ('co', 1e-3), 'HC': ('hc', 1e-3), 'NO': ('no', 1e-3 * M_NO / M_NO2), 'NO2': ('no2', 1e-3), 'HONO': ('hono', 1e-3 * M_HONO / M_NO2), 'BC': ('nvpm', 1e-3),

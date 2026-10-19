@@ -4,8 +4,9 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
 #SBATCH --time=00:30:00
+: "${RUN_DIR:?set RUN_DIR to the run directory, e.g. /net/fs12/d1/shreya22/Parser/Output/aeic_runs/<tag>}"
 set -euo pipefail
-O=/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12
+O=$RUN_DIR
 P=/net/fs01/home/shreya22/AEIC/.venv/bin/python
 $P -I $O/scripts/build_cases.py 1 $O/cases_example all
 $P -I - $O/cases_example/AEIC_2025_all_01.0.5x0.625.72L.nc <<'PY'

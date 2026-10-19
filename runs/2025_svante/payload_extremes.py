@@ -1,5 +1,6 @@
+import os
 import csv, tomllib, sqlite3
-O = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'; V = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/2025_full_v1'
+O = os.environ['RUN_DIR']; V = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/2025_full_v1'
 new = {r['performance_model_key']: r for r in csv.DictReader(open(f'{O}/inputs/aircraft_parameters.csv')) if r['performance_model_key']}
 fl = dict(sqlite3.connect('file:/net/fs12/d1/shreya22/Parser/Output/aeic_input_v2/2025/oag_2025_cirium.sqlite?mode=ro', uri=True).execute('select f.performance_model_key, count(*) from schedules s join flights f on f.id=s.flight_id group by 1').fetchall())
 rows = []

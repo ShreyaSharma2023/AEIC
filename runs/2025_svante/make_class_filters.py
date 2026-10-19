@@ -1,9 +1,10 @@
 """Write one filter TOML per aircraft class (wide, narrow, small) listing the model keys of that class, read from the models'
 own aircraft_class field. Hard failures: a class other than those three, a key in no class or in two, an existing output file.
 Also prints keys and flights per class (from the mission database)."""
+import os
 import glob, sqlite3, tomllib, collections, sys
 from pathlib import Path
-O = Path('/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'); out = O / 'class_filters'; out.mkdir(exist_ok=True)
+O = Path(os.environ['RUN_DIR']); out = O / 'class_filters'; out.mkdir(exist_ok=True)
 CLASSES = ('wide', 'narrow', 'small')
 by = collections.defaultdict(list)
 for p in sorted(glob.glob(str(O / 'models/*.toml'))):

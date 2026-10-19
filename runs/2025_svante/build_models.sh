@@ -1,9 +1,10 @@
 #!/bin/bash
+: "${RUN_DIR:?set RUN_DIR to the run directory, e.g. /net/fs12/d1/shreya22/Parser/Output/aeic_runs/<tag>}"
 # Build the 580 PIANO performance models of version v2026.10.12 from the key table, with --force
 # because the payloads changed. Run on a compute node:  srun --jobid=<job> -n1 scripts/build_models.sh
 # Paths come from run_config.toml; the AEIC commit is checked first.
 set -euo pipefail
-O=/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12
+O=$RUN_DIR
 PY=/net/fs01/home/shreya22/AEIC/.venv/bin/python
 cfg() { "$PY" -c 'import sys, tomllib
 v = tomllib.load(open(sys.argv[1], "rb"))

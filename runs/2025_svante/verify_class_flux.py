@@ -1,6 +1,7 @@
 """only_wide + only_narrow + only_small == all, per month and variable, cell by cell (36 class files, 12 case files)."""
+import os
 import sys, numpy as np, netCDF4 as nc
-O = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'
+O = os.environ['RUN_DIR']
 VARS = ['FUELBURN', 'CO', 'HC', 'NO', 'NO2', 'HONO', 'BC', 'CO2', 'H2O', 'SO2', 'SO4', 'NVPM_N']; bad = []; worst = 0.0
 for m in range(1, 13):
     MM = f'{m:02d}'; a = nc.Dataset(f'{O}/cases/AEIC_2025_all_{MM}.0.5x0.625.72L.nc')

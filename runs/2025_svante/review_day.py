@@ -5,6 +5,7 @@ New:  v2026.10.12/test_day/trajectories/DAY/*.nc      v1: 2025_full_v1/full/traj
 Reports: flights scheduled / flown / failed (and why), NaN and negative values, CO2 per kg fuel, payload decided by the builder
 (payload_mass, reserve_shortfall, overweight_mass), flights landing lighter than empty weight + payload carried, fuel and emission
 change against v1 flight by flight (by distance band), and the cruise level against the database level."""
+import os
 import glob, re, sqlite3, sys, tomllib, collections
 from pathlib import Path
 import numpy as np
@@ -12,7 +13,7 @@ import netCDF4 as nc
 
 DAY = sys.argv[1] if len(sys.argv) > 1 else '2025-01-15'
 R1 = Path('/net/fs12/d1/shreya22/Parser/Output/aeic_runs/2025_full_v1')
-R2 = Path('/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12')
+R2 = Path(os.environ['RUN_DIR'])
 DB = '/net/fs12/d1/shreya22/Parser/Output/aeic_input_v2/2025/oag_2025_cirium.sqlite'
 SRC = {'v1': (R1 / 'full/trajectories' / DAY, R1 / 'full/slice_logs' / DAY, R1 / 'models'),
        'new': (R2 / 'test_day/trajectories' / DAY, R2 / 'test_day/slice_logs' / DAY, R2 / 'models')}

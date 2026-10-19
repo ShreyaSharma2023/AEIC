@@ -1,11 +1,12 @@
 #!/bin/bash
+: "${RUN_DIR:?set RUN_DIR to the run directory, e.g. /net/fs12/d1/shreya22/Parser/Output/aeic_runs/<tag>}"
 # Launch the v2026.10.12 run.   usage: launch.sh test | full [--dry-run]
 #   test: 2025-01-15 only, output in test_day/ (review before the full year)
 #   full: 365 days + 2025-10-31 (2024 winds) + the two days outside 2025, output in full/,
 #         split between the reservation and the normal queue (see [slurm] in run_config.toml)
 # All settings are in run_config.toml; --dry-run prints the sbatch commands instead of running them.
 set -euo pipefail
-O=/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12
+O=$RUN_DIR
 PY=/net/fs01/home/shreya22/AEIC/.venv/bin/python
 cfg() { "$PY" -c 'import sys, tomllib
 v = tomllib.load(open(sys.argv[1], "rb"))

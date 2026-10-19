@@ -1,5 +1,6 @@
 #!/bin/bash
-O=/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12
+: "${RUN_DIR:?set RUN_DIR to the run directory, e.g. /net/fs12/d1/shreya22/Parser/Output/aeic_runs/<tag>}"
+O=$RUN_DIR
 export PATH="/home/shreya22/.conda/envs/aeic/bin:$PATH"
 cd /net/fs01/home/shreya22/AEIC
 echo "== payload"; uv run python $O/scripts/check_payload.py

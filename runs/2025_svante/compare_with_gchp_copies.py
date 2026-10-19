@@ -1,7 +1,7 @@
 """The regenerated species-mass files against the copies GCHP reads (Paper_1/AviationEmis_gchp_ready_species_mass):
 every variable's data must be identical and the coordinate attributes GCHP needs must match. Exit non-zero on any difference."""
 import glob, os, sys, numpy as np, netCDF4 as nc
-A = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12/cases_species_mass'; B = '/net/fs12/d1/shreya22/Paper_1/AviationEmis_gchp_ready_species_mass'
+A = os.environ['RUN_DIR'] + '/cases_species_mass'; B = '/net/fs12/d1/shreya22/Paper_1/AviationEmis_gchp_ready_species_mass'
 fa = sorted(os.path.basename(p) for p in glob.glob(A + '/*.nc')); fb = sorted(os.path.basename(p) for p in glob.glob(B + '/*.nc'))
 bad = [] if fa == fb else [f'file lists differ: {len(fa)} vs {len(fb)}']
 for f in fa:

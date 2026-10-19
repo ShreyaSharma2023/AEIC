@@ -1,5 +1,6 @@
+import os
 import glob, sqlite3, numpy as np, netCDF4 as nc
-O = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'
+O = os.environ['RUN_DIR']
 db = sqlite3.connect('file:/net/fs12/d1/shreya22/Parser/Output/aeic_input_v2/2025/oag_2025_cirium.sqlite?mode=ro', uri=True)
 print([r[1] for r in db.execute('pragma table_info(airports)')])
 f = sorted(glob.glob(f'{O}/test_day/trajectories/2025-01-15/2025-01-15-0*.nc'))[3]; d = nc.Dataset(f)

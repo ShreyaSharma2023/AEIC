@@ -1,5 +1,6 @@
+import os
 import glob, numpy as np, netCDF4 as nc
-O = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'
+O = os.environ['RUN_DIR']
 f = sorted(glob.glob(f'{O}/test_day/trajectories/2025-01-15/2025-01-15-0*.nc'))[2]; d = nc.Dataset(f)
 modes = list(d['thrust_mode'][:]); sp = list(d['species'][:]); print('thrust modes in the file:', modes)
 for s in ('CO2', 'NOx', 'HC', 'CO'):

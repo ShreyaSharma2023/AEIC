@@ -1,8 +1,9 @@
 """Size of the possible gap: fuel and emissions of the ICAO climb (2.2 min) and approach (4 min) modes, which AEIC zeroes when
 climb_descent_mode = trajectory. Estimated from the models and the schedule of one day (flights all flown in the test day):
 sum over flights of time-in-mode x fuel flow (x EI). Read-only."""
+import os
 import sqlite3, tomllib, collections, sys
-O = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'
+O = os.environ['RUN_DIR']
 DAY = sys.argv[1] if len(sys.argv) > 1 else '2025-01-15'
 import numpy as np
 t0 = int(np.datetime64(DAY + 'T00:00:00', 's').astype(np.int64))

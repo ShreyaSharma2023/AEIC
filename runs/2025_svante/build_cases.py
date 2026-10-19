@@ -4,7 +4,7 @@ Layout of HEMCO AEIC2019 (time, lev, lat, lon; kg m-2 s-1). LTO (2D *_lto grids)
 Flux = grams / 1000 / cell area / seconds of the file's period (period_end is a day, inclusive)."""
 import sys, os, datetime as dt
 import numpy as np, netCDF4 as nc
-O = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'
+O = os.environ['RUN_DIR']
 R = 6371007.2; CO2_EI = 3155.6          # earth radius of GEOS-Chem (gcpy); g CO2 per kg fuel
 CASES = {'only_wide': ('wide',), 'only_narrow': ('narrow',), 'only_small': ('small',), 'all': ('wide', 'narrow', 'small'), 'no_wide': ('narrow', 'small'), 'no_narrow': ('wide', 'small'), 'no_small': ('wide', 'narrow')}
 # output name: (source grid variable, scale to kg of the output species per g of source, units, long name)
@@ -48,8 +48,8 @@ for case in cases:
         v = o.createVariable(name, 'f4', ('time', 'lev', 'lat', 'lon'), zlib=True, complevel=1, chunksizes=(1, 1, len(lat), len(lon)))
         v[0] = (field * scale / area / seconds).astype(np.float32)
         v.setncatts({'units': units, 'long_name': long_name})
-    o.setncatts({'title': f'AEIC v2026.10.12 aviation emissions, case {case}', 'case': case, 'classes_included': ','.join(CASES[case]),
-                 'source': 'class grids (wide, narrow, small) of the merged v2026.10.12 store, added; no subtraction',
+    o.setncatts({'title': f'AEIC {os.path.basename(O)} aviation emissions, case {case}', 'case': case, 'classes_included': ','.join(CASES[case]),
+                 'source': f'class grids (wide, narrow, small) of the merged {os.path.basename(O)} store, added; no subtraction',
                  'period_start_utc': ref.period_start_utc, 'period_end_utc': ref.period_end_utc, 'period_seconds': seconds,
                  'lto': 'idle, takeoff (and all LTO emissions of the store) are in model level 1; APU and GSE are not included',
                  'not_included': 'OC (volatile organic PM), DISTANCE: not produced by AEIC', 'created_utc': dt.datetime.now(dt.timezone.utc).isoformat()})

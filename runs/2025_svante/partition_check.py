@@ -3,9 +3,10 @@
 2. the 12 monthly files of each class exist, carry the same periods, and have no NaN or negative cells;
 3. wide + narrow + small annual CO2 equals the store's trajectory and LTO CO2 (from components_626168.out), relative 1e-6.
 usage: partition_check.py"""
+import os
 import glob, re, sys, tomllib
 import numpy as np, netCDF4 as nc
-O = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'
+O = os.environ['RUN_DIR']
 CLS = ('wide', 'narrow', 'small'); TOL = 1e-6; bad = []
 keys = {p.split('/')[-1][:-5] for p in glob.glob(f'{O}/models/*.toml')} - {'config'}
 sets = {c: set(tomllib.load(open(f'{O}/class_filters/{c}.toml', 'rb'))['performance_model_key']) for c in CLS}

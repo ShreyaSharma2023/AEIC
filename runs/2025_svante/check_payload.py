@@ -1,8 +1,9 @@
 """Payload check of the v2026.10.12 models: each model's maximum_payload_kg equals the table's max_payload_kg
 (no rounding surprises), and how the payloads differ from the first run's (v1) models and table. Read-only."""
+import os
 import csv, sys, tomllib, collections
 from pathlib import Path
-O = Path('/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'); V = Path('/net/fs12/d1/shreya22/Parser/Output/aeic_runs/2025_full_v1')
+O = Path(os.environ['RUN_DIR']); V = Path('/net/fs12/d1/shreya22/Parser/Output/aeic_runs/2025_full_v1')
 new = {r['performance_model_key']: r for r in csv.DictReader(open(O / 'inputs/aircraft_parameters.csv')) if r['performance_model_key']}
 old = {r['performance_model_key']: r for r in csv.DictReader(open(V / 'inputs/aircraft_parameters.csv')) if r['performance_model_key']}
 assert set(new) == set(old), 'key sets differ'

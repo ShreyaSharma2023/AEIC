@@ -3,7 +3,7 @@ combined hash, and the commit, tag and clean state of the three repositories. Re
 usage: make_manifest.py [note ...]"""
 import sys, json, hashlib, subprocess, glob, tomllib, datetime as dt
 from pathlib import Path
-O = Path('/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12')
+O = Path(os.environ['RUN_DIR'])
 cfg = tomllib.load(open(O / 'run_config.toml', 'rb'))
 import os
 out = O / os.environ.get('MANIFEST', 'manifest.json')

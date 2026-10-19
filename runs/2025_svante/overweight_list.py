@@ -1,5 +1,6 @@
+import os
 import glob, sqlite3, tomllib, numpy as np, netCDF4 as nc
-O = '/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.12'; DAY = '2025-01-15'
+O = os.environ['RUN_DIR']; DAY = '2025-01-15'
 db = sqlite3.connect('file:/net/fs12/d1/shreya22/Parser/Output/aeic_input_v2/2025/oag_2025_cirium.sqlite?mode=ro', uri=True)
 rows = []
 for f in sorted(glob.glob(f'{O}/test_day/trajectories/{DAY}/{DAY}-[0-9][0-9][0-9].nc')):
