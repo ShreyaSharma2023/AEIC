@@ -3,6 +3,8 @@
 2. Per file and species: area * seconds * flux (converted back to grams) equals the sum of the included class grids (trajectory + LTO), relative 1e-5.
 3. no_wide + no_narrow + no_small == 2 * all, per variable and month (cell by cell, relative 1e-5 of the variable's max).
 4. Level 1 holds at least the LTO of the included classes; levels 2-72 equal the trajectory part only."""
+raise SystemExit('verify_cases.py checks the superseded build_cases.py outputs (cases/, class_flux/); use '
+                 'verify_cases_species_mass.py. Kept only as the record of the first v2026.10.12 case files')
 import os
 import sys, numpy as np, netCDF4 as nc
 O = os.environ['RUN_DIR']

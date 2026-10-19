@@ -2,6 +2,8 @@
 usage: build_cases.py MONTH(1-12) OUTDIR [case ...]     cases: all no_wide no_narrow no_small (default: all four)
 Layout of HEMCO AEIC2019 (time, lev, lat, lon; kg m-2 s-1). LTO (2D *_lto grids) is added to model level 1 only.
 Flux = grams / 1000 / cell area / seconds of the file's period (period_end is a day, inclusive)."""
+raise SystemExit('build_cases.py is superseded by build_cases_species_mass.py (NO and HONO as true species mass, '
+                 'flux over the calendar month); it is kept only as the record of the first v2026.10.12 case files')
 import sys, os, datetime as dt
 import numpy as np, netCDF4 as nc
 O = os.environ['RUN_DIR']

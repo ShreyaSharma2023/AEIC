@@ -1,4 +1,6 @@
 """only_wide + only_narrow + only_small == all, per month and variable, cell by cell (36 class files, 12 case files)."""
+raise SystemExit('verify_class_flux.py checks the superseded build_cases.py outputs (cases/, class_flux/); use '
+                 'verify_cases_species_mass.py. Kept only as the record of the first v2026.10.12 case files')
 import os
 import sys, numpy as np, netCDF4 as nc
 O = os.environ['RUN_DIR']

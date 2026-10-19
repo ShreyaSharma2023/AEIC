@@ -32,6 +32,13 @@ verbatim"); later commits change them and appear as ordinary diffs.
 3. `launch.sh full`: 365 days plus the special and edge days.
 4. `link_tree.sh`, `merge_store.sbatch`, `chk_store.sbatch`, `components.sbatch`: merge and check the store.
 5. `run_class_filters.sh`, `grid_launch.sh`: grid once per aircraft class.
-6. `build_cases_species_mass.sbatch`, then `verify_cases_species_mass.py`, `verify_class_flux.py`,
-   `partition_check.py`: the GCHP-ready case files.
+6. `build_cases_species_mass.sbatch` (cases `all no_wide no_narrow no_small` into `cases_species_mass/`,
+   `only_*` into `class_flux_species_mass/`), then `verify_cases_species_mass.py` and `partition_check.py`:
+   the GCHP-ready case files. `nox_totals_check.py` prints the NOx and fuel totals as GCHP reads them.
+   - NO and HONO from AEIC are NO2-equivalent masses; the case files hold true NO and HONO masses
+     (converted by M(NO)/M(NO2), M(HONO)/M(NO2)). Check 5 of the verifier (NOx closure against AEIC's own
+     NOx total) fails if that conversion is missing or applied twice.
+   - The flux is over the calendar month (check 7); the UTC edge days 2024-12-31 and 2026-01-01 are folded
+     into January and December (attribute `folded_edge_days`).
+   - `build_cases.py`, `verify_cases.py` and `verify_class_flux.py` are superseded and refuse to run.
 7. `make_manifest.py` (via `run_manifest*.sh`): write `manifest.json`.

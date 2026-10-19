@@ -4,9 +4,13 @@
 1. 48 files, all variables finite, none negative.
 2. Per file and species: area * seconds * flux (converted back to grams) equals the sum of the included class grids (trajectory + LTO), relative 1e-5.
 3. no_wide + no_narrow + no_small == 2 * all, per variable and month (cell by cell, relative 1e-5 of the variable's max).
-4. Level 1 holds at least the LTO of the included classes; levels 2-72 equal the trajectory part only."""
+4. Per level (all, CO2): levels 2-72 equal the class grids' 3-D field; level 1 equals their 3-D level 1 plus the
+   2-D LTO (take-off and idle). The 3-D field holds the trajectories and the climb-out/approach columns, which
+   reach level 1, so level 1 is not LTO only.
+7. Each file's period is its calendar month of 2025: time = the 1st at 00:00 UTC, period_seconds = days in month
+   (the flux divisor; v2026.10.12 divided January and December by 32 days)."""
 import os
-import sys, numpy as np, netCDF4 as nc
+import calendar, datetime as dt, sys, numpy as np, netCDF4 as nc
 O = os.environ['RUN_DIR']
 M_NO, M_NO2, M_HONO = 30.0061, 46.0055, 47.0134
 CASES = {'only_wide': ('wide',), 'only_narrow': ('narrow',), 'only_small': ('small',), 'all': ('wide', 'narrow', 'small'), 'no_wide': ('narrow', 'small'), 'no_narrow': ('wide', 'small'), 'no_small': ('wide', 'narrow')}
@@ -19,6 +23,9 @@ for m in range(1, 13):
     for case, inc in CASES.items():
         d = nc.Dataset(f'{O}/{"class_flux_species_mass" if case.startswith("only_") else "cases_species_mass"}/AEIC_2025_{case}_{MM}.0.5x0.625.72L.nc'); area = np.asarray(d['AREA'][:]); sec = d.period_seconds
         out[case] = {}
+        days = calendar.monthrange(2025, m)[1]; t0 = (dt.datetime(2025, m, 1, tzinfo=dt.timezone.utc) - dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)).total_seconds()
+        if sec != days * 86400.0 or float(d['time'][0]) != t0:
+            bad.append(f'{case} {MM}: period {sec / 86400} d from {float(d["time"][0])}, not the calendar month ({days} d from {t0})')
         for v, (g, scale) in SRC.items():
             a = np.asarray(d[v][0], dtype=np.float64); out[case][v] = a
             if not np.isfinite(a).all(): bad.append(f'{case} {MM} {v}: non-finite')
@@ -29,8 +36,11 @@ for m in range(1, 13):
             rel = tot_file / (traj + lto) - 1; worst = max(worst, abs(rel))
             if abs(rel) > 1e-5: bad.append(f'{case} {MM} {v}: file {tot_file:.6e} vs classes {traj + lto:.6e} ({rel:+.1e})')
             if v == 'CO2' and case == 'all':
-                lev1 = (a[0] * area).sum() * sec / scale; upper = (a[1:] * area[None]).sum() * sec / scale
-                if abs(upper / traj - 1) > 1e-5 or lev1 < lto * (1 - 1e-5): bad.append(f'{MM}: level split wrong (upper {upper:.6e} vs traj {traj:.6e})')
+                file_lev = (a * area[None]).sum(axis=(1, 2)) * sec / scale
+                grid_lev = sum(np.asarray(cls[c][g][0], dtype=np.float64).sum(axis=(1, 2)) for c in inc)
+                grid_lev[0] += lto
+                lev_err = np.abs(file_lev - grid_lev) / max(float(grid_lev.max()), 1e-300)
+                if lev_err.max() > 1e-5: bad.append(f'{MM}: level {int(lev_err.argmax()) + 1} differs from the class grids ({lev_err.max():.1e})')
         nox = sum(((out[case][v] * area[None]).sum() * sec * 1e3) * f for v, f in (('NO', M_NO2 / M_NO), ('NO2', 1.0), ('HONO', M_NO2 / M_HONO)))
         ref = sum(float(np.asarray(cls[c]['nox'][0], dtype=np.float64).sum()) + float(np.asarray(cls[c]['nox_lto'][0], dtype=np.float64).sum()) for c in inc)
         if abs(nox / ref - 1) > 1e-5: bad.append(f'{case} {MM}: NOx closure {nox:.6e} vs {ref:.6e}')
