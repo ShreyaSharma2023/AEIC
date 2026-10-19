@@ -12,6 +12,7 @@ import click
 import numpy as np
 import zarr
 
+from AEIC.emissions.emission import LTO_CYCLE_TOP
 from AEIC.gridding.grid import PRESSURE_GRIDS, Grid
 from AEIC.gridding.kernels import process_segments_nonuniform_z
 from AEIC.gridding.output import OutputGrid
@@ -68,6 +69,29 @@ def map_phase(
     p = Progress(total=ntrajs, desc='Trajectory')
     lat_min = min(grid.latitude.range)
     lon_min = min(grid.longitude.range)
+
+    def flush(n: int) -> None:
+        process_segments_nonuniform_z(
+            lat0[:n],
+            lon0[:n],
+            z0[:n],
+            lat1[:n],
+            lon1[:n],
+            z1[:n],
+            emissions[:n, :],
+            traj_output,
+            z_edges,
+            lat_min,
+            grid.latitude.resolution,
+            lon_min,
+            grid.longitude.resolution,
+        )
+
+    def vertical(altitude: np.ndarray) -> np.ndarray:
+        if use_pressure:
+            return pressure_at_altitude_isa_bada4(altitude) / 100.0
+        return altitude
+
     for traj in traj_iter:
         # Split trajectories across the date line and process each
         # sub-trajectory separately.
@@ -75,21 +99,7 @@ def map_phase(
             # If adding the segments from this sub-trajectory would exceed the
             # batch size, process the current batch and start a new one.
             if nsegs + len(sub_traj) - 1 > NSEGMENTS:
-                process_segments_nonuniform_z(
-                    lat0[:nsegs],
-                    lon0[:nsegs],
-                    z0[:nsegs],
-                    lat1[:nsegs],
-                    lon1[:nsegs],
-                    z1[:nsegs],
-                    emissions[:nsegs, :],
-                    traj_output,
-                    z_edges,
-                    lat_min,
-                    grid.latitude.resolution,
-                    lon_min,
-                    grid.longitude.resolution,
-                )
+                flush(nsegs)
                 nsegs = 0
 
             # Add segments from this sub-trajectory to the batch arrays.
@@ -99,20 +109,26 @@ def map_phase(
             lon0[start:end] = sub_traj.longitude[:-1]
             lat1[start:end] = sub_traj.latitude[1:]
             lon1[start:end] = sub_traj.longitude[1:]
-            if use_pressure:
-                alt0 = sub_traj.altitude[:-1]
-                alt1 = sub_traj.altitude[1:]
-                z0[start:end] = pressure_at_altitude_isa_bada4(alt0) / 100.0
-                z1[start:end] = pressure_at_altitude_isa_bada4(alt1) / 100.0
-            else:
-                z0[start:end] = sub_traj.altitude[:-1]
-                z1[start:end] = sub_traj.altitude[1:]
+            z0[start:end] = vertical(sub_traj.altitude[:-1])
+            z1[start:end] = vertical(sub_traj.altitude[1:])
             for i, sp in enumerate(species):
                 emissions[start:end, i] = sub_traj.trajectory_emissions[sp][:-1]
             nsegs += len(sub_traj) - 1
 
-        # Add the LTO emissions from this trajectory to the surface output
-        # array.
+        # LTO climb-out and approach: vertical columns between the airports
+        # and the trajectory's end points (see `_terminal_columns`).
+        columns = _terminal_columns(traj, species)
+        if nsegs + len(columns) > NSEGMENTS:
+            flush(nsegs)
+            nsegs = 0
+        for lat, lon, bottom, top, weights in columns:
+            lat0[nsegs] = lat1[nsegs] = lat
+            lon0[nsegs] = lon1[nsegs] = lon
+            z0[nsegs], z1[nsegs] = vertical(np.array([bottom, top]))
+            emissions[nsegs, :] = weights
+            nsegs += 1
+
+        # Take-off and idle LTO emissions go to the surface output array.
         _add_surface_emissions(lto_output, traj, grid, species)
 
         p.update()
@@ -120,21 +136,7 @@ def map_phase(
 
     # Process any left-over segments in the batch arrays.
     if nsegs > 0:
-        process_segments_nonuniform_z(
-            lat0[:nsegs],
-            lon0[:nsegs],
-            z0[:nsegs],
-            lat1[:nsegs],
-            lon1[:nsegs],
-            z1[:nsegs],
-            emissions[:nsegs, :],
-            traj_output,
-            z_edges,
-            lat_min,
-            grid.latitude.resolution,
-            lon_min,
-            grid.longitude.resolution,
-        )
+        flush(nsegs)
 
     # Save trajectory output array to zarr file all in one go: more efficient
     # than incrementally updating the zarr file for each batch.
@@ -160,17 +162,49 @@ def map_phase(
     )
 
 
+def _terminal_columns(
+    traj: Trajectory, species: list[Species]
+) -> list[tuple[float, float, float, float, np.ndarray]]:
+    """Vertical segments (lat, lon, bottom altitude, top altitude, emissions)
+    for the LTO climb-out and approach modes of a trajectory.
+
+    The modes cover the flight between the airport and 3,000 ft above it.
+    `compute_emissions` keeps them only when the trajectory starts (ends)
+    exactly that height above the origin (destination) airport, so the column
+    runs from the trajectory's first point down to the airport, and from its
+    last point down to the destination airport; the gridding kernel spreads
+    each evenly over its height. A mode that is zero (the trajectory covers
+    that flight itself, or a store written before the modes were kept) gives
+    no column.
+    """
+    columns = []
+    for mode, point in ((ThrustMode.CLIMB, 0), (ThrustMode.APPROACH, -1)):
+        weights = np.array([traj.lto_emissions[sp][mode] for sp in species])
+        if not weights.any():
+            continue
+        top = float(traj.altitude[point])
+        columns.append(
+            (
+                float(traj.latitude[point]),
+                float(traj.longitude[point]),
+                top - LTO_CYCLE_TOP,
+                top,
+                weights,
+            )
+        )
+    return columns
+
+
 def _add_surface_emissions(
     lto_output: np.ndarray, traj: Trajectory, grid: Grid, species: list[Species]
 ) -> None:
-    # Add the LTO emissions from this trajectory to the surface output array.
-    # This is done here rather than in the segment processing loop because LTO
-    # emissions are not associated with a specific segment and are instead
-    # recorded at the trajectory level. The different LTO thrust mode emissions
-    # are split between the origin and destination as follows: takeoff and
-    # climb emissions are assigned to the origin, approach emissions are
-    # assigned to the destination, and idle emissions are split 50/50 between
-    # the origin and destination.
+    # Add the surface LTO emissions from this trajectory to the surface output
+    # array. This is done here rather than in the segment processing loop
+    # because LTO emissions are not associated with a specific segment and are
+    # instead recorded at the trajectory level. Take-off emissions are assigned
+    # to the origin and idle (taxi) emissions are split 50/50 between the
+    # origin and destination. Climb-out and approach are not surface emissions:
+    # they go into the 3-D output as vertical columns (`_terminal_columns`).
     for i, sp in enumerate(species):
         lto_output[
             grid.latitude.index(traj.latitude[0]),
@@ -178,17 +212,13 @@ def _add_surface_emissions(
             i,
         ] += (
             traj.lto_emissions[sp][ThrustMode.TAKEOFF]
-            + traj.lto_emissions[sp][ThrustMode.CLIMB]
             + 0.5 * traj.lto_emissions[sp][ThrustMode.IDLE]
         )
         lto_output[
             grid.latitude.index(traj.latitude[-1]),
             grid.longitude.index(traj.longitude[-1]),
             i,
-        ] += (
-            traj.lto_emissions[sp][ThrustMode.APPROACH]
-            + 0.5 * traj.lto_emissions[sp][ThrustMode.IDLE]
-        )
+        ] += 0.5 * traj.lto_emissions[sp][ThrustMode.IDLE]
 
 
 def _discover_slice_files(

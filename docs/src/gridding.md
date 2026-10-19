@@ -94,6 +94,21 @@ aeic trajectories-to-grid \
 
 This produces `output/grid/map-slice-00000.zarr`.
 
+#### Where LTO emissions go
+
+- **Take-off and idle (taxi)** are surface emissions. They go into the 2-D LTO output
+  (`{map-prefix}-{slice-index:05d}-lto.zarr`, the `*_lto` variables after reduce): take-off
+  at the origin airport cell, idle split 50/50 between origin and destination.
+- **Climb-out and approach** cover the flight between the airport and 3,000 ft above it.
+  When they are non-zero (the trajectory starts or ends 3,000 ft above the airport; see
+  [emissions](emission.md)), each becomes a vertical segment in the 3-D output. Climb-out
+  runs from the origin airport up to the trajectory's first point, approach from its last
+  point down to the destination airport. The gridding kernel spreads each one evenly over
+  its height, in metres or, on pressure grids, linearly in pressure, like any trajectory
+  segment.
+- **Older stores**, written before climb-out and approach were kept, have those modes at
+  zero and grid exactly as before.
+
 ### Reduce mode
 
 Reduce mode (`--mode reduce`) discovers all zarr slice files matching the
