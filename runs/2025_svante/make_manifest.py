@@ -1,11 +1,10 @@
 """Write manifest.json for the run: path, size, mtime and sha256 of every input and of run_config.toml, the models'
 combined hash, and the commit, tag and clean state of the three repositories. Refuses to overwrite an existing manifest.
 usage: make_manifest.py [note ...]"""
-import sys, json, hashlib, subprocess, glob, tomllib, datetime as dt
+import os, sys, json, hashlib, subprocess, glob, tomllib, datetime as dt
 from pathlib import Path
 O = Path(os.environ['RUN_DIR'])
 cfg = tomllib.load(open(O / 'run_config.toml', 'rb'))
-import os
 out = O / os.environ.get('MANIFEST', 'manifest.json')
 assert not out.exists(), f'{out} exists, not overwriting'
 def sha(p):
