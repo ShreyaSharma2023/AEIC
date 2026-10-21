@@ -1,7 +1,10 @@
 """Hard check that wide + narrow + small partition the merged store. Exits non-zero on any failure.
 1. every performance model key (models/*.toml) is in exactly one class filter;
 2. the 12 monthly files of each class exist, carry the same periods, and have no NaN or negative cells;
-3. wide + narrow + small annual CO2 equals the store's trajectory and LTO CO2 (from components_626168.out), relative 1e-6.
+3. wide + narrow + small annual CO2, 3-D grid plus 2-D surface LTO grid, equals the store's trajectory plus LTO CO2 (from the run's
+   logs/components_*.out), relative 1e-6. The split between the two grids is not the store's: the surface grid holds take-off and
+   idle, and the 3-D grid holds the trajectories plus the LTO climb-out and approach columns (AEIC commit cdf3894), so the
+   3-D total exceeds the store's trajectory CO2 and the surface total is below the store's LTO CO2 by the same amount.
 usage: partition_check.py"""
 import os
 import glob, re, sys, tomllib
@@ -33,13 +36,18 @@ for c in CLS:
     print(f'{c}: 12 files, CO2 traj {tot.get((c, "co2"), 0) / 1e12:.3f} Tg, LTO {tot.get((c, "co2_lto"), 0) / 1e12:.3f} Tg')
 for m, p in sorted(periods.items()):
     if len(p) != 1: bad.append(f'month {m}: classes disagree on the period {p}')
-txt = open(f'{O}/logs/components_626168.out').read()
+logs = glob.glob(f'{O}/logs/components_*.out')        # the components job's log of THIS run; its name carries the job id
+if len(logs) != 1: sys.exit(f'expected exactly one {O}/logs/components_*.out, found {len(logs)}')
+txt = open(logs[0]).read()
 ref = {k: float(re.search(rf'^{k}\s+([\d.]+) Tg CO2', txt, re.M).group(1)) * 1e12 for k in ('traj', 'lto')}
-for n, k in (('co2', 'traj'), ('co2_lto', 'lto')):
-    s = sum(tot.get((c, n), 0.0) for c in CLS)
-    rel = s / ref[k] - 1
-    print(f'{n}: classes {s / 1e12:.4f} Tg, store {ref[k] / 1e12:.3f} Tg (rounded to 1e-3), relative {rel:+.2e}')
-    if abs(rel) > 2e-6 * 1 and abs(s - ref[k]) > 0.0006e12: bad.append(f'{n}: classes differ from the store by {rel:+.2e}')
+grid3d = sum(tot.get((c, 'co2'), 0.0) for c in CLS); surface = sum(tot.get((c, 'co2_lto'), 0.0) for c in CLS)
+columns = grid3d - ref['traj']                      # what the 3-D grids hold beyond the store's trajectories: climb-out and approach
+rel = (grid3d + surface) / (ref['traj'] + ref['lto']) - 1
+print(f'3-D grids {grid3d / 1e12:.4f} Tg = store trajectories {ref["traj"] / 1e12:.3f} + climb-out/approach columns {columns / 1e12:.4f}')
+print(f'surface LTO grids {surface / 1e12:.4f} Tg (take-off and idle) = {surface / ref["lto"] * 100:.1f}% of the store LTO {ref["lto"] / 1e12:.3f} Tg; columns {columns / ref["lto"] * 100:.1f}%')
+print(f'grids total {(grid3d + surface) / 1e12:.4f} Tg, store trajectory + LTO {(ref["traj"] + ref["lto"]) / 1e12:.3f} Tg (rounded to 1e-3), relative {rel:+.2e}')
+if abs(rel) > 2e-6 and abs(grid3d + surface - ref['traj'] - ref['lto']) > 0.0012e12: bad.append(f'classes differ from the store by {rel:+.2e}')
+if not (0 < columns < ref['lto']): bad.append(f'climb-out/approach columns {columns / 1e12:.3f} Tg are not between 0 and the store LTO')
 print('PARTITION CHECK', 'FAILED' if bad else 'PASSED')
 for b in bad: print('  FAIL', b)
 sys.exit(1 if bad else 0)
