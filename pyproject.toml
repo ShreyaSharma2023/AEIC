@@ -88,7 +88,8 @@ files = [
 ]
 
 [tool.ruff]
-extend-exclude = ["*.ipynb"]
+# runs/ holds the job scripts of production runs exactly as they ran (dense one-liners included): not restyled.
+extend-exclude = ["*.ipynb", "runs"]
 
 # Use Black-compatible defaults
 line-length = 88
