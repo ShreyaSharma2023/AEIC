@@ -1,0 +1,87 @@
+# Run configuration of the AEIC 2025 rerun, version v2026.10.19.
+#
+# This file is the one place the settings of the run live. scripts/run_day.sbatch reads it and
+# refuses to start without it; manifest.json records its sha256 with the other inputs.
+# Change a setting here (and re-make the manifest), not in a script.
+
+[version]
+tag = "v2026.10.19"
+description = "As v2026.10.12 (same schedule, models, inputs and physics options), plus LTO climb-out and approach kept below 3,000 ft and gridded as columns, and calendar-month GCHP flux"
+
+# The three repositories, each tagged v2026.10.19 at these commits. The run refuses to start unless
+# the AEIC checkout is exactly this commit with a clean tree.
+[repos.aeic]
+path = "/net/fs01/home/shreya22/AEIC"
+remote = "git@github.com:ShreyaSharma2023/AEIC.git"
+branch = "svante-test"
+commit = "aa1d6a0f992b7a8ab399c72d6a9a4ecf1d89a7fb"
+
+[repos.parser]
+path = "/net/fs01/home/shreya22/aircraft-performance-db-parser"
+remote = "git@github.mit.edu:LAE/aircraft-performance-db-parser.git"
+branch = "generate-aircraft-parameters"
+commit = "bfcfe3d6ae26e196ce52b6d933f9885be83bf00d"
+
+[repos.piano_database]
+path = "/home/shreya22/PIANO-database"
+remote = "git@github.mit.edu:LAE/PIANO-database.git"
+branch = "generated-aircraft-parameters"
+commit = "6fbc9886079dc17360799e094bdefaea85a61d90"
+
+[paths]
+root = "/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.19"
+# Models are built from the table below with `aeic make-piano-models --force`.
+models_dir = "/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.19/models"
+aircraft_parameters = "/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.19/inputs/aircraft_parameters.csv"
+sn_overrides = "/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.19/inputs/engine_sn_overrides.csv"
+piano_root = "/home/shreya22/PIANO-database"
+edb = "/net/fs12/d1/shreya22/Parser/Input/edb-emissions-databank_v32__web_.xlsx"
+# Mission database of the first run (v1): the key table has the same 580 keys, so it still matches.
+mission_db = "/net/fs12/d1/shreya22/Parser/Output/aeic_input_v2/2025/oag_2025_cirium.sqlite"
+load_factors = "/net/fs12/d1/shreya22/Parser/Input/load_factors.csv"
+merra2_source = "/net/geoschem/data/gcgrid/data/ExtData/GEOS_0.5x0.625/MERRA2"
+weather_days = "/net/fs12/d1/shreya22/Parser/Output/weather_days"
+# Trajectories go to <output_root>/trajectories/<DAY>/<DAY>-NNN.nc, slice logs to <output_root>/slice_logs/<DAY>.
+output_root = "/net/fs12/d1/shreya22/Parser/Output/aeic_runs/v2026.10.19/full"
+
+[slurm]
+partition = "hdr200"
+reservation = "shreya"
+cpus_per_task = 16          # one aeic process (slice) per core
+mem = "64G"
+time = "03:00:00"
+max_parallel_days = 12      # 192 cores in the reservation / 16
+
+# The full year is split between two pools so that no day runs twice. Array index 0 is 2025-01-01.
+#   reservation pool: indices 0,3,6,... except 303 (121 days), partition/reservation above
+#   normal-queue pool: indices 1,4,7,... and 2,5,8,... (243 days), two arrays of at most 12 days at once each
+#   plus 2025-10-31 (index 303, winds of 2024) and the two days outside 2025, in the normal queue
+# hdr and hdr200 share a QOS cap of 576 CPUs per user (36 tasks of 16 cores).
+[slurm.normal_queue]
+partition = "hdr,hdr200"
+parallel_days_per_array = 12
+
+[weather]
+# MERRA2 for 2025 stops at October: November and December use 2024's winds (labelled as 2025).
+# source_year_for_months_from = 11 and the two special days are handled by run_day.sbatch:
+#   2025-10-31 (next-day files missing): SOURCE_YEAR_FORCE=2024
+#   2024-12-31, 2026-01-01 (schedule rows outside 2025): DAY_OVERRIDE
+source_year = 2024
+source_year_for_months_from = 11
+file_resolution = "daily"
+data_resolution = "hourly"
+
+# Every option of `aeic run` that decides the physics. --config-file, --performance-selector-dir,
+# --model-cache-size, --mission-db-file, --output-store, --load-factor-file, --departure-date,
+# --slice-count and --slice-index are added by run_day.sbatch from the sections above.
+[aeic_run]
+args = [
+  "--builder", "adjustable",
+  "--iterate-mass",
+  "--iterate-ground-distance",
+  "--descent-distance-from-model",
+  "--wind-aware-apex",
+  "--consistent-starting-mass",
+  "--max-mass-iterations", "10",
+  "--when-overweight", "cap",
+]

@@ -24,6 +24,13 @@ verbatim"); later commits change them and appear as ordinary diffs.
 - `merge_store.sbatch` and `grid_month.sbatch` still log to the shared
   `aeic_run_2025/day_logs/` directory.
 
+## Records of the runs
+
+- `run_config.toml` and `PLAN.md` in this directory are the **v2026.10.12** record.
+- `v2026.10.19/` is the record of the corrected rerun: `PLAN.md` (why, events, deviations, results), `run_config.toml`, and
+  `case_files.sha256` (checksums of the 84 GCHP case files). Its scripts are this directory at tag v2026.10.19 plus the changes
+  committed after it (listed under "Deviations of scripts/ from the tag" in that `PLAN.md`).
+
 ## Order of a full run
 
 1. `build_models.sh`: build the PIANO performance models (checks the AEIC commit against
@@ -42,3 +49,8 @@ verbatim"); later commits change them and appear as ordinary diffs.
      into January and December (attribute `folded_edge_days`).
    - `build_cases.py`, `verify_cases.py` and `verify_class_flux.py` are superseded and refuse to run.
 7. `make_manifest.py` (via `run_manifest*.sh`): write `manifest.json`.
+
+Since v2026.10.19, steps 4-6 are queued once, on the reservation, behind the day jobs: `queue_next_steps.sh DAYJOBS`
+(`DRY=1` prints the commands). The gate (`gate_days.py`, run by `after_days.sbatch`) must pass before anything is merged;
+`finish_checks.sbatch` runs every final check. Gridding runs 8 map processes per job (`GRID_CPUS`): with 16, jobs outgrew the
+250 GB cap. `requeue_gridding.sh` redoes gridding, the case files and the final checks.
